@@ -1,0 +1,38 @@
+# === Backend Framework ===
+fastapi
+uvicorn[standard]
+python-multipart
+python-dotenv
+pydantic
+pydantic-settings
+loguru
+
+# === RAG Pipeline ===
+langchain
+langchain-community
+langchain-core
+langchain-text-splitters
+langchain-experimental
+langchain-openai
+langchain-huggingface
+
+# === Document Processing ===
+pypdf
+python-docx
+
+# === Embeddings & Models ===
+sentence-transformers
+transformers
+torch>=2.0.0
+
+# === Vector Database ===
+qdrant-client
+langchain-qdrant
+
+# === Retrieval ===
+rank-bm25
+
+# === Testing ===
+pytest
+pytest-asyncio
+httpx

@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  # --- Vector Database (Qdrant) ---
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: explainable-rag-qdrant
+    ports:
+      - "6333:6333"   # REST API
+      - "6334:6334"   # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  # --- Backend API ---
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: explainable-rag-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+    volumes:
+      - ./data/uploads:/app/data/uploads
+    depends_on:
+      - qdrant
+    restart: unless-stopped
+
+  # --- Frontend (Step 4 — not yet implemented) ---
+  # frontend:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/Dockerfile.frontend
+  #   container_name: explainable-rag-frontend
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     - backend
+
+volumes:
+  qdrant_data:
