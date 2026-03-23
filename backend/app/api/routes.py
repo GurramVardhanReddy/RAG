@@ -1,28 +1,39 @@
 """
 API route definitions for the Explainable RAG system.
+
+Integrates:
+- Document upload with paragraph detection
+- Query with page + paragraph attribution
+- Full metrics tracking per query
 """
 
 import os
-import time
 import uuid
+import time
 from fastapi import APIRouter, UploadFile, File, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
 from loguru import logger
 
-from backend.app.core.config import get_settings
 from backend.app.services.document_loader import load_document
+from backend.app.services.vector_store import VectorStoreService
+from backend.app.core.config import get_settings
 from backend.rag.chunking.chunker import recursive_chunk, semantic_chunk
 from backend.rag.generation.generator import generate_answer, build_context
 from backend.rag.explainability.engine import ExplainabilityEngine
+from backend.rag.metrics.tracker import RAGMetricsTracker, ResponseQualityMetrics, ResourceMetrics
 
 router = APIRouter()
 settings = get_settings()
-explainability_engine = ExplainabilityEngine()
 
-# In-memory document registry (tracks uploaded docs)
-# In production, this would be a proper database
-document_registry: dict = {}
+# In-memory document registry
+document_registry = {}
+
+# Global metrics tracker — persists across requests
+metrics_tracker = RAGMetricsTracker(output_dir="./metrics_output")
+
+# Explainability engine
+explainability_engine = ExplainabilityEngine()
 
 
 # =====================
@@ -32,16 +43,20 @@ document_registry: dict = {}
 class QueryRequest(BaseModel):
     """User's question about their uploaded document."""
     question: str
-    document_id: Optional[str] = None  # If None, search all documents
+    document_id: str
     top_k: int = 5
 
 
 class SourceChunk(BaseModel):
-    """A retrieved chunk with explainability metadata."""
+    """A retrieved chunk with explainability metadata including paragraph info."""
     content: str
     page_number: Optional[int] = None
-    chunk_index: int
-    relevance_score: float
+    paragraph_number: Optional[int] = None
+    paragraph_numbers: list[int] = []
+    paragraph_match_type: str = "unknown"
+    chunk_index: int = 0
+    relevance_score: float = 0.0
+    retrieval_method: str = "vector_search_cosine"
 
 
 class ExplainabilityInfo(BaseModel):
@@ -53,10 +68,24 @@ class ExplainabilityInfo(BaseModel):
     processing_time_ms: float
 
 
+class MetricsInfo(BaseModel):
+    """Per-query metrics (subset exposed in API response)."""
+    query_to_vector_ms: float = 0.0
+    similarity_search_ms: float = 0.0
+    generation_ms: float = 0.0
+    explainability_ms: float = 0.0
+    end_to_end_ms: float = 0.0
+    memory_used_mb: float = 0.0
+    token_count_prompt: int = 0
+    faithfulness_score: float = 0.0
+    relevancy_score: float = 0.0
+
+
 class QueryResponse(BaseModel):
-    """Full response with answer + explainability."""
+    """Full response with answer + explainability + metrics."""
     answer: str
     explainability: ExplainabilityInfo
+    metrics: Optional[MetricsInfo] = None
 
 
 class UploadResponse(BaseModel):
@@ -65,6 +94,8 @@ class UploadResponse(BaseModel):
     filename: str
     total_pages: int
     total_chunks: int
+    total_paragraphs: int
+    processing_time_ms: float
     message: str
 
 
@@ -75,75 +106,73 @@ class UploadResponse(BaseModel):
 @router.post("/upload", response_model=UploadResponse)
 async def upload_document(request: Request, file: UploadFile = File(...)):
     """
-    Upload a PDF document.
-    The system will chunk it, embed it, and store it in Qdrant.
+    Upload a PDF/DOCX document.
+    Chunks it, embeds it, stores in vector DB with paragraph metadata.
     """
     start_time = time.time()
 
     # 1. Validate file type
     filename = file.filename
     ext = os.path.splitext(filename)[1].lower()
-    if ext not in settings.allowed_extensions:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File type '{ext}' not supported. Allowed: {settings.allowed_extensions}",
-        )
+    if ext not in [".pdf", ".docx", ".txt"]:
+        raise HTTPException(status_code=400, detail=f"File type '{ext}' not supported. Use .pdf, .docx, or .txt")
 
-    # 2. Save the uploaded file
-    os.makedirs(settings.upload_dir, exist_ok=True)
+    # 2. Save to disk
     document_id = str(uuid.uuid4())[:8]
-    save_path = os.path.join(settings.upload_dir, f"{document_id}_{filename}")
+    upload_dir = "data/uploads"
+    os.makedirs(upload_dir, exist_ok=True)
+    save_path = os.path.join(upload_dir, f"{document_id}_{filename}")
 
     content = await file.read()
     with open(save_path, "wb") as f:
         f.write(content)
-    logger.info(f"Saved uploaded file: {save_path}")
+    logger.info(f"Saved {filename} as {save_path}")
 
-    # 3. Load the document
-    try:
-        docs = load_document(save_path)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to load document: {str(e)}")
+    # 3. Load document (with paragraph detection)
+    docs = load_document(save_path)
 
-    total_pages = len(docs)
+    # Build page_paragraphs map for vector store
+    page_paragraphs = {}
+    total_paragraphs = 0
+    for doc in docs:
+        page_num = doc.metadata.get("page", 0)
+        paragraphs = doc.metadata.get("paragraphs", [])
+        page_paragraphs[page_num] = paragraphs
+        total_paragraphs += len(paragraphs)
 
-    # 4. Chunk the document (semantic chunking — groups by meaning)
+    # 4. Chunk the document (semantic chunking)
     embedding_model = request.app.state.embedding_model
     chunks = semantic_chunk(docs, embedding_model=embedding_model)
-    total_chunks = len(chunks)
 
     # 5. Generate embeddings
-    #embedding_model = request.app.state.embedding_model
     chunk_texts = [chunk.page_content for chunk in chunks]
-    logger.info(f"Generating embeddings for {total_chunks} chunks...")
     vectors = embedding_model.embed_documents(chunk_texts)
-    logger.info("Embeddings generated!")
 
-    # 6. Store in Qdrant
-    vector_store = request.app.state.vector_store
-    if vector_store.client is None:
-        raise HTTPException(status_code=503, detail="Vector database is not connected. Is Qdrant running?")
+    # 6. Store in Qdrant (with paragraph metadata)
+    vector_store: VectorStoreService = request.app.state.vector_store
+    vector_store.add_documents(
+        chunks, vectors, document_id,
+        page_paragraphs=page_paragraphs,
+    )
 
-    vector_store.add_documents(chunks, vectors, document_id)
-
-    # 7. Register the document
-    elapsed = time.time() - start_time
+    # 7. Register document
+    processing_time = (time.time() - start_time) * 1000
     document_registry[document_id] = {
         "filename": filename,
-        "total_pages": total_pages,
-        "total_chunks": total_chunks,
-        "file_path": save_path,
-        "processing_time_seconds": round(elapsed, 2),
+        "total_pages": len(docs),
+        "total_chunks": len(chunks),
+        "total_paragraphs": total_paragraphs,
+        "processing_time_ms": processing_time,
     }
-
-    logger.info(f"Document '{filename}' processed in {elapsed:.1f}s — {total_chunks} chunks stored")
 
     return UploadResponse(
         document_id=document_id,
         filename=filename,
-        total_pages=total_pages,
-        total_chunks=total_chunks,
-        message=f"Document processed successfully in {elapsed:.1f}s",
+        total_pages=len(docs),
+        total_chunks=len(chunks),
+        total_paragraphs=total_paragraphs,
+        processing_time_ms=round(processing_time, 2),
+        message=f"Document processed: {len(docs)} pages, {len(chunks)} chunks, {total_paragraphs} paragraphs detected",
     )
 
 
@@ -151,103 +180,149 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
 async def query_document(request: Request, body: QueryRequest):
     """
     Ask a question about an uploaded document.
-    Returns an answer with full explainability metadata.
+    Returns answer with page/paragraph attribution and full metrics.
     """
-    start_time = time.time()
+    # --- Start metrics tracking ---
+    metrics_record = metrics_tracker.start_query(body.question)
 
-    # 1. Get services from app state
+    vector_store: VectorStoreService = request.app.state.vector_store
     embedding_model = request.app.state.embedding_model
-    vector_store = request.app.state.vector_store
 
-    if vector_store.client is None:
-        raise HTTPException(status_code=503, detail="Vector database is not connected. Is Qdrant running?")
+    # --- A1. Embed the query ---
+    with metrics_tracker.timer.time_stage("query_to_vector"):
+        query_vector = embedding_model.embed_query(body.question)
 
-    # 2. Embed the query
-    query_vector = embedding_model.embed_query(body.question)
-
-    # 3. Search Qdrant
-    search_results = vector_store.search(
-        query_vector=query_vector,
-        top_k=body.top_k,
-        document_id=body.document_id,
-    )
+    # --- A2. Similarity search ---
+    with metrics_tracker.timer.time_stage("similarity_search"):
+        search_results = vector_store.search(
+            query_vector=query_vector,
+            top_k=body.top_k,
+            document_id=body.document_id,
+        )
 
     if not search_results:
-        raise HTTPException(status_code=404, detail="No relevant chunks found. Have you uploaded a document?")
-
-    # 4. Convert search results to Documents for the generator
-    from langchain_core.documents import Document
-    documents = [
-        Document(
-            page_content=r["text"],
-            metadata={"page": r["page_number"], "source": r["source"]},
+        raise HTTPException(
+            status_code=404,
+            detail="No matching chunks found. Upload a document first."
         )
-        for r in search_results
-    ]
-    scores = [r["score"] for r in search_results]
 
-    # 5. Generate answer with LLM
-    try:
+    # --- A3. Generate answer ---
+    with metrics_tracker.timer.time_stage("generation"):
         answer = generate_answer(
             question=body.question,
-            documents=documents,
-            scores=scores,
+            search_results=search_results,
+            model_name="gpt-4o",
+            temperature=0,
             api_key=settings.openai_api_key,
         )
-    except Exception as e:
-        logger.error(f"Generation failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Answer generation failed: {str(e)}")
 
-    # 6. Build explainability info
-    elapsed_ms = (time.time() - start_time) * 1000
-
-    # Get total chunks in collection for context
-    collection_info = vector_store.get_collection_info()
-    total_chunks = collection_info.get("points_count", 0)
-
-    sources_used = [
-        SourceChunk(
-            content=r["text"][:300] + "..." if len(r["text"]) > 300 else r["text"],
-            page_number=r["page_number"],
-            chunk_index=r["chunk_index"],
-            relevance_score=round(r["score"], 4),
+    # --- A4. Build explainability ---
+    with metrics_tracker.timer.time_stage("explainability_generation"):
+        scores = [r["score"] for r in search_results]
+        confidence = explainability_engine.compute_confidence_score(
+            scores, answer, body.question
         )
-        for r in search_results
-    ]
 
-    confidence = explainability_engine.compute_confidence_score(scores, answer, body.question)
+        # Get collection info for total chunks
+        collection_info = vector_store.get_collection_info()
+        total_chunks = collection_info.get("points_count", 0)
 
-    explainability = ExplainabilityInfo(
-        sources_used=sources_used,
-        confidence_score=round(confidence, 4),
-        retrieval_strategy="vector_search_cosine",
-        total_chunks_searched=total_chunks,
-        processing_time_ms=round(elapsed_ms, 1),
+        # Build source chunks with paragraph info
+        sources = [
+            SourceChunk(
+                content=r["text"][:500],  # Truncate for response size
+                page_number=r.get("page_number", -1),
+                paragraph_number=r.get("paragraph_number", -1),
+                paragraph_numbers=r.get("paragraph_numbers", []),
+                paragraph_match_type=r.get("paragraph_match_type", "unknown"),
+                chunk_index=r.get("chunk_index", 0),
+                relevance_score=round(r.get("score", 0.0), 4),
+                retrieval_method="vector_search_cosine",
+            )
+            for r in search_results
+        ]
+
+    # --- Compute response quality metrics (fallback/heuristic) ---
+    chunk_texts = [r["text"] for r in search_results]
+    relevancy = ResponseQualityMetrics.relevancy_score(
+        body.question, answer, chunk_texts
+    )
+    faithfulness = ResponseQualityMetrics.faithfulness_score(
+        answer, chunk_texts
     )
 
-    logger.info(
-        f"Query answered in {elapsed_ms:.0f}ms | "
-        f"Confidence: {confidence:.2f} | "
-        f"Sources: {len(sources_used)}"
-    )
+    # --- Compute resource metrics ---
+    context_usage = ResourceMetrics.compute_context_usage(chunk_texts)
 
-    return QueryResponse(answer=answer, explainability=explainability)
+    # --- Populate metrics record ---
+    metrics_record.chunks_retrieved = len(search_results)
+    metrics_record.chunks_used_in_prompt = len(search_results)
+    metrics_record.token_count_prompt = context_usage["total_tokens_in_prompt"]
+    metrics_record.relevancy_score = relevancy
+    metrics_record.faithfulness_score = faithfulness
+
+    # --- Finish metrics tracking ---
+    metrics_record = metrics_tracker.finish_query(metrics_record)
+
+    # --- Calculate end-to-end time for response ---
+    end_to_end_ms = metrics_record.end_to_end_time * 1000
+
+    # --- Build response ---
+    return QueryResponse(
+        answer=answer,
+        explainability=ExplainabilityInfo(
+            sources_used=sources,
+            confidence_score=round(confidence, 4),
+            retrieval_strategy="vector_search_cosine",
+            total_chunks_searched=total_chunks,
+            processing_time_ms=round(end_to_end_ms, 2),
+        ),
+        metrics=MetricsInfo(
+            query_to_vector_ms=round((metrics_record.query_to_vector_time) * 1000, 2),
+            similarity_search_ms=round((metrics_record.similarity_search_time) * 1000, 2),
+            generation_ms=round((metrics_record.generation_time) * 1000, 2),
+            explainability_ms=round((metrics_record.explainability_generation_time) * 1000, 2),
+            end_to_end_ms=round(end_to_end_ms, 2),
+            memory_used_mb=round(metrics_record.memory_used_mb, 2),
+            token_count_prompt=metrics_record.token_count_prompt,
+            faithfulness_score=round(faithfulness, 4),
+            relevancy_score=round(relevancy, 4),
+        ),
+    )
 
 
 @router.get("/documents")
 async def list_documents():
     """List all uploaded and processed documents."""
+    return {"documents": document_registry}
+
+
+@router.get("/metrics")
+async def get_metrics():
+    """
+    Get aggregated metrics across all queries.
+    Also exports to JSON file for analysis.
+    """
+    # Export to file
+    filepath = metrics_tracker.export_results()
+    csv_path = metrics_tracker.export_csv()
+
     return {
-        "documents": [
-            {"document_id": doc_id, **info}
-            for doc_id, info in document_registry.items()
-        ]
+        "total_queries": len(metrics_tracker.records),
+        "summary": metrics_tracker._compute_summary(),
+        "exported_to": filepath,
+        "csv_exported_to": csv_path,
+        "records": [r.to_dict() for r in metrics_tracker.records[-10:]],  # Last 10
     }
 
 
-@router.get("/documents/{document_id}")
-async def get_document_info(document_id: str):
-    """Get metadata about a specific uploaded document."""
-    if document_id not in document_registry:
-        raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found")
-    return {"document_id": document_id, **document_registry[document_id]}
+@router.get("/metrics/export")
+async def export_metrics():
+    """Export all metrics to JSON and CSV files."""
+    json_path = metrics_tracker.export_results()
+    csv_path = metrics_tracker.export_csv()
+    return {
+        "json_file": json_path,
+        "csv_file": csv_path,
+        "total_records": len(metrics_tracker.records),
+    }
