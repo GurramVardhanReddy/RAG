@@ -1,6 +1,0 @@
-question,generated_answer,ground_truth,dataset,type,hit_rate,mrr,precision_at_k,exact_match,f1,rouge_l,answer_contains,faithfulness,relevancy,correctness,confidence_score,end_to_end_ms
-In what country is Normandy located?,"Normandy is located in France. [Source 1] (Page 1, Para 1).",France,squad,short_form,1.0,1.0,1.0,0.0,0.16666666666666669,0.16666666666666669,1.0,0.0,0.0,0.0,0.6,1855.24
-When were the Normans in Normandy?,Information not found in the provided document.,10th and 11th centuries|in the 10th and 11th centuries,squad,short_form,1.0,1.0,1.0,0.0,0.1818181818181818,0.1818181818181818,0.0,0.0,0.0,0.0,0.15,1199.8
-From which countries did the Norse originate?,"Denmark, Iceland, and Norway. [Source 1] (Page 1, Para 1).","Denmark, Iceland and Norway",squad,short_form,1.0,1.0,1.0,0.0,0.5714285714285715,0.5714285714285715,1.0,0.0,0.0,0.0,0.6,1913.06
-Who was the Norse leader?,"Rollo was the Norse leader. [Source 1] (Page 1, Para 1).",Rollo,squad,short_form,1.0,1.0,1.0,0.0,0.18181818181818182,0.18181818181818182,1.0,0.0,0.0,0.0,0.6,1255.89
-What century did the Normans first gain their separate identity?,"The Normans first gained their separate identity in the 10th century. [Source 1] (Page 1, Para 1).",the first half of the 10th century|10th|10th century,squad,short_form,1.0,1.0,1.0,0.0,0.3,0.3,1.0,0.0,0.0,0.0,0.8,1312.16
