@@ -1,0 +1,6 @@
+question,generated_answer,ground_truth,dataset,type,hit_rate,mrr,precision_at_k,exact_match,f1,rouge_l,answer_contains,faithfulness,relevancy,correctness,confidence_score,end_to_end_ms
+when was the last time anyone was on the moon,Information not found.,14 December 1972 UTC|December 1972,nq,short_form,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.15,3347.74
+who wrote he ain't heavy he's my brother lyrics,Information not found.,Bobby Scott|Bob Russell,nq,short_form,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.15,889.84
+how many seasons of the bastard executioner are there,Information not found.,one|one season,nq,short_form,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.15,1337.22
+when did the eagles win last super bowl,Information not found.,2017,nq,short_form,1.0,1.0,0.8,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.15,921.8
+who won last year's ncaa women's basketball,Information not found.,South Carolina,nq,short_form,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.15,863.19

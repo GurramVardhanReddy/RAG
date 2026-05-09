@@ -1,0 +1,218 @@
+{
+  "natural_questions": {
+    "exact_match": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    },
+    "f1": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    },
+    "rouge_l": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    },
+    "answer_contains": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    },
+    "hit_rate": {
+      "mean": 0.2,
+      "std": 0.4,
+      "min": 0.0,
+      "max": 1.0,
+      "count": 5
+    },
+    "mrr": {
+      "mean": 0.2,
+      "std": 0.4,
+      "min": 0.0,
+      "max": 1.0,
+      "count": 5
+    },
+    "precision_at_k": {
+      "mean": 0.16,
+      "std": 0.32,
+      "min": 0.0,
+      "max": 0.8,
+      "count": 5
+    },
+    "faithfulness": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    },
+    "relevancy": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    },
+    "correctness": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    }
+  },
+  "hotpotqa": {
+    "exact_match": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    },
+    "f1": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    },
+    "rouge_l": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    },
+    "answer_contains": {
+      "mean": 0.2,
+      "std": 0.4,
+      "min": 0.0,
+      "max": 1.0,
+      "count": 5
+    },
+    "hit_rate": {
+      "mean": 0.2,
+      "std": 0.4,
+      "min": 0.0,
+      "max": 1.0,
+      "count": 5
+    },
+    "mrr": {
+      "mean": 0.04,
+      "std": 0.08,
+      "min": 0.0,
+      "max": 0.2,
+      "count": 5
+    },
+    "precision_at_k": {
+      "mean": 0.04,
+      "std": 0.08,
+      "min": 0.0,
+      "max": 0.2,
+      "count": 5
+    },
+    "faithfulness": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    },
+    "relevancy": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    },
+    "correctness": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    }
+  },
+  "fever": {
+    "exact_match": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    },
+    "f1": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    },
+    "rouge_l": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    },
+    "answer_contains": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    },
+    "hit_rate": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    },
+    "mrr": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    },
+    "precision_at_k": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    },
+    "faithfulness": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    },
+    "relevancy": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    },
+    "correctness": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "count": 5
+    }
+  }
+}

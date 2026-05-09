@@ -1,0 +1,139 @@
+question,generated_answer,ground_truth,dataset,type,hit_rate,mrr,precision_at_k,exact_match,f1,rouge_l,answer_contains,faithfulness,relevancy,correctness,confidence_score,end_to_end_ms
+does ethanol take more energy make that produces,"REFUTES
+
+The context provides information about the energy balance of ethanol production. It states that for corn ethanol produced in the US, one unit of fossil-fuel energy is required to create 1.3 energy units from the resulting ethanol, and for sugarcane ethanol produced in Brazil, one unit of fossil-fuel energy is required to create 8 energy units. This indicates that ethanol production yields more energy than it consumes, thus refuting the claim that ethanol takes more energy to make than it produces.",False,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1757.75
+is house tax and property tax are same,"SUPPORTS
+
+The context from Source 1 states that ""Property tax or 'house tax' is a local tax on buildings, along with appurtenant land,"" indicating that the terms ""house tax"" and ""property tax"" are used interchangeably, thus supporting the claim that they are the same.",True,boolq,fact_verification,1.0,0.25,0.2,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1103.93
+is pain experienced in a missing body part or paralyzed area,"SUPPORTS
+
+The context from Source 1 describes phantom pain sensations as perceptions experienced relating to a limb or organ that is not physically part of the body, which includes situations of limb loss due to amputation or congenital deficiency, as well as following nerve avulsion or spinal cord injury. This supports the claim that pain can be experienced in a missing body part or paralyzed area.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1357.49
+is harry potter and the escape from gringotts a roller coaster ride,"SUPPORTS
+
+The context from Source 1 confirms that ""Harry Potter and the Escape from Gringotts"" is indeed an indoor steel roller coaster at Universal Studios Florida.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,2963.18
+is there a difference between hydroxyzine hcl and hydroxyzine pam,"SUPPORTS. The context from Source 1 confirms that there is a difference between hydroxyzine HCl (hydrochloride salt) and hydroxyzine pam (pamoate salt), as they are different formulations of the drug.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1041.12
+is barq's root beer a pepsi product,"REFUTES
+
+The context states that Barq's root beer is bottled by the Coca-Cola Company, not Pepsi.",False,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1036.96
+can an odd number be divided by an even number,"NOT ENOUGH INFO
+
+The context provides information about the definitions of even and odd numbers, stating that an even number is divisible by two without a remainder, while an odd number is not. However, it does not specifically address whether an odd number can be divided by an even number in general terms. Therefore, there is not enough information to evaluate the claim.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.5,0.0,0.6,1051.97
+is there a word with q without u,"SUPPORTS
+
+The context from Source 1 confirms that there are modern-English words that contain Q not followed by U, such as qiana, qwerty, and tranq.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1054.36
+can u drive in canada with us license,"NOT ENOUGH INFO
+
+The provided context does not contain information about whether a U.S. driver's license is valid for driving in Canada. The context only mentions the requirement of having a vehicle's registration document and proof of insurance when driving into Canada, but it does not address the validity of a U.S. driver's license in Canada.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.5,0.0,0.6,1196.98
+is there a play off for third place in the world cup,"SUPPORTS
+
+The context from Source 1 confirms that a third place play-off was played between the two losing teams of the semi-finals in the 2018 FIFA World Cup.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,859.94
+can minors drink with parents in new york,"SUPPORTS
+
+The context from Source 1 confirms that in New York, persons under 21 are prohibited from purchasing alcohol or possessing alcohol with the intent to consume, unless the alcohol was given to them by their parent or legal guardian. There is no law prohibiting where people under 21 may possess or consume alcohol that was given to them by their parents. This supports the claim that minors can drink with parents in New York.",True,boolq,fact_verification,1.0,0.2,0.2,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,8691.79
+is the show bloodline based on a true story,"NOT ENOUGH INFO
+
+The context provides information about the show ""Bloodline,"" including its creators and a brief synopsis, but it does not mention whether the show is based on a true story.",False,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1028.27
+is it bad to wash your hair with shower gel,"NOT ENOUGH INFO
+
+The context provides information that shower gels can be used as a substitute for shampoo and may give approximately the same result as using a moisturizing shampoo. However, it does not provide information on whether it is ""bad"" to wash your hair with shower gel, as ""bad"" could imply various negative effects not addressed in the context.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.5,0.5,0.6,1121.89
+is the liver part of the excretory system,"SUPPORTS
+
+Explanation: The context from Source 1 describes the liver's role in detoxifying and breaking down chemicals, poisons, and other toxins, and mentions that it transforms ammonia into urea, which is then filtered by the kidney into urine. This indicates that the liver plays a role in processing waste products, which is a function of the excretory system.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.5,1.0,0.5,0.6,1891.85
+is fantastic beasts and where to find them a prequel,"SUPPORTS
+
+Explanation: The context from Source 1 states that ""Fantastic Beasts and Where to Find Them is a spin-off and prequel to the Harry Potter film series,"" confirming that the film is indeed a prequel.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1045.18
+will there be a season 8 of vampire diaries,"SUPPORTS
+
+The context from Source 1 confirms that The Vampire Diaries was renewed for an eighth season by The CW on March 11, 2016.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1318.1
+was the movie strangers based on a true story,"SUPPORTS
+
+The context from Source 1 states that ""The Strangers"" was inspired by real-life events, including the Manson family Tate murders, the Keddie Cabin Murders, and a series of break-ins in the writer-director's neighborhood. This supports the claim that the movie was based on a true story.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.05128205128205127,0.05128205128205127,1.0,1.0,1.0,1.0,0.4,1307.87
+is durham university part of the russell group,"SUPPORTS
+
+The context from Source 1 confirms that Durham University became a member of the Russell Group in August 2012.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,2312.09
+is the tv show the resident over for the season,"NOT ENOUGH INFO
+
+The context provides information about the premiere and renewal of ""The Resident"" for a second season, as well as the conclusion of its first season on May 14, 2018. However, it does not provide information about whether the show is currently over for the season.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1519.88
+does magnesium citrate have citric acid in it,"SUPPORTS. The context from Source 1 states that magnesium citrate is a magnesium preparation in salt form with citric acid in a 1:1 ratio, confirming that citric acid is indeed part of magnesium citrate.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1037.4
+does p o box come before street address,"NOT ENOUGH INFO
+
+The context provided does not directly address the order in which a P.O. Box and street address should be written or mentioned. It explains how street addressing works in relation to P.O. Boxes, but it does not specify whether a P.O. Box should come before or after a street address in any particular format.",False,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1134.66
+does a spark plug keep an engine running,"NOT ENOUGH INFO
+
+The context provides detailed information about the function of a spark plug, which is to deliver electric current to ignite the fuel/air mixture in the combustion chamber of a spark-ignition engine. However, it does not explicitly state whether a spark plug keeps an engine running. While the ignition process is crucial for starting and maintaining engine operation, the context does not directly address the claim about the spark plug's role in keeping the engine running.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.8,0.0,0.6,1125.73
+is a cape and a cloak the same,"REFUTES
+
+Explanation: The context from Source 1 distinguishes between a cape and a cloak, indicating that they are not the same. Ladies may wear a long cloak usually called a cape, or a full-length cloak, suggesting that a cape is a type of cloak but not identical to a full-length cloak.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1197.54
+does it cost money to renounce us citizenship,"SUPPORTS
+
+The context from Source 1 confirms that renunciation of U.S. citizenship was free until July 2010, after which a fee of $450 was established. This fee was later increased to $2,350, effective September 12, 2014. Therefore, it does cost money to renounce U.S. citizenship.",True,boolq,fact_verification,1.0,1.0,0.2,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1440.96
+is a fire 7 the same as a kindle,"REFUTES
+
+The context from Source 1 indicates that the Fire 7 is a later generation of the device originally called the Kindle Fire. The name ""Kindle"" was dropped in September 2014, and subsequent devices, including the Fire 7, are referred to as ""Fire"" tablets, not ""Kindle."" Therefore, a Fire 7 is not the same as a Kindle.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.0,0.6,1497.78
+can you drink alcohol with your parents in wisconsin,"SUPPORTS
+
+The context from Source 1 confirms that in Wisconsin, individuals under the legal drinking age of 21 may be served, possess, or consume alcohol if they are with a parent, legal guardian, or spouse who is of legal drinking age.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1175.23
+do penguins have feathers arising from the epidermis,"SUPPORTS
+
+Explanation: The context from Source 1 states that contour feathers are not uniformly distributed on the skin of birds except in some groups such as penguins. This implies that penguins do have feathers, and since feathers arise from the epidermis (the outer layer of skin), the claim is supported.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1084.05
+do you need to break in a car,"NOT ENOUGH INFO
+
+The context provides information about the process of breaking in an engine and mentions that it is generally done during production for modern vehicles. However, it also notes that owner's manuals may still recommend gentle use initially. The context does not definitively state whether breaking in a car is necessary or required for all vehicles, leaving the claim without a clear confirmation or contradiction.",False,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.8,0.5,0.6,2403.52
+is the enchanted forest in oregon still open,"SUPPORTS
+
+The context from Source 1 states that the Enchanted Forest is still owned and operated by the Tofte family, indicating that it is still open.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.5,1.0,0.5,0.6,835.94
+is there a golf course at the indy 500,"SUPPORTS. The context from Source 1 confirms that there is a golf course, the Brickyard Crossing Golf Resort, located on the grounds of the Indianapolis Motor Speedway, which is associated with the Indy 500.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1141.95
+does deadpool have a kid in the comics,"SUPPORTS. The context from Source 1 states that Deadpool discovers he has a daughter named Eleanor from a former flame named Carmelita, confirming that Deadpool has a child in the comics.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1291.92
+do they still make benson & hedges cigarettes,"SUPPORTS
+
+The context from Source 1 confirms that Benson & Hedges is a British brand of cigarettes that is still registered and manufactured, indicating that they are still being made.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1648.52
+is federal income tax the same as social security,"REFUTES
+
+The context from Source 1 indicates that federal personal income tax and Social Security are distinct. Puerto Ricans do not generally pay federal personal income tax, but they do pay into Social Security and are eligible for its benefits. This distinction shows that federal income tax and Social Security are not the same.",False,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,4166.54
+is an engine speed sensor the same as a crankshaft sensor,"SUPPORTS
+
+Explanation: The context from Source 1 indicates that the crank sensor is commonly used as the primary source for the measurement of engine speed in revolutions per minute. This suggests that a crankshaft sensor functions as an engine speed sensor, supporting the claim that they are the same.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1049.35
+is indiana jones temple of doom a prequel,"SUPPORTS. The context from Source 1 confirms that ""Indiana Jones and the Temple of Doom"" is a prequel to the 1981 film ""Raiders of the Lost Ark.""",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1047.04
+is there any next part of avengers infinity war,"SUPPORTS
+
+The context from Source 1 confirms that there is an upcoming Avengers film, colloquially referred to as Avengers 4, which is intended to be the direct sequel to 2018's Avengers: Infinity War.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1348.98
+is the toyota highlander on a truck frame,"REFUTES
+
+The context from Source 1 states that the Highlander is a car-based mid-size SUV or mid-size crossover, which indicates it is not built on a truck frame. Instead, it is the crossover counterpart to the more rugged, truck-based midsize 4Runner.",False,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1304.95
+is it legal to do a cover of a song,"SUPPORTS
+
+The context from Source 1 explains that since the Copyright Act of 1909, musicians in the United States have had the right to record a version of someone else's previously recorded and released tune. This can be done through a negotiated license or a mechanical license, which allows the recording artist to pay a standard royalty to the original author/copyright holder. This confirms that it is legal to do a cover of a song under these conditions.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,2192.72
+can carbon form polar covalent bonds with hydrogen,"REFUTES
+
+The context states that the electronegativity difference between carbon and hydrogen is 0.35, which is small, and therefore the C−H bond is generally regarded as being non-polar. This contradicts the claim that carbon can form polar covalent bonds with hydrogen.",False,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,2323.58
+is there a sequel to the movie the golden compass,"NOT ENOUGH INFO
+
+The provided context does not contain any information about a sequel to the movie ""The Golden Compass."" The sources discuss other films and topics, but none mention ""The Golden Compass"" or its potential sequels.",False,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.4,909.93
+is columbus day a national holiday in the united states,"SUPPORTS
+
+The context from Source 1 confirms that Columbus Day is celebrated as a national holiday in the United States.",True,boolq,fact_verification,1.0,0.5,0.2,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,956.11
+are new balance and nike the same company,"REFUTES
+
+The context states that New Balance is the second most-renowned American sporting company after Nike, indicating that they are separate entities.",False,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1908.53
+is there an interstate that goes coast to coast,"NOT ENOUGH INFO
+
+The context mentions that U.S. Highway 20 is a coast-to-coast route and that Interstate 90 is the longest Interstate Highway in the U.S., but it does not explicitly state whether there is an Interstate that goes coast to coast.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.5,0.0,0.6,1684.15
+is pureed tomatoes the same as tomato sauce,"REFUTES
+
+The context from Source 1 explains that tomato purée and tomato sauce differ in consistency and flavor, with purée being thicker and having a deeper flavor than sauce. Therefore, pureed tomatoes are not the same as tomato sauce.",False,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,2400.77
+can there be a word without a vowel,"SUPPORTS. The context from Source 1 states that there are a handful of words in English that do not have vowels, either because the vowel sounds are not written with vowel letters or because the words themselves are pronounced without vowel sounds.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,978.86
+does only the winner get money on tipping point,"SUPPORTS
+
+The context from Source 1 confirms that only the winner at the end of the game show ""Tipping Point"" has a chance to take home any money, while the other contestants leave with nothing except any non-cash prizes they may have won during the game.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1861.54
+is there such a thing as a turkey vulture,"SUPPORTS
+
+The context from Source 1 confirms the existence of the turkey vulture, describing it as the most widespread of the New World vultures and providing details about its range and habitat.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,802.56
+has anyone hit a hole in one on a par 5,"SUPPORTS
+
+The context from Source 1 confirms that a hole-in-one on a par 5, known as a condor, has been recorded on four occasions.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,3283.49
+do the jets and giants share a stadium,"SUPPORTS
+
+The context from Source 1 confirms that the New York Giants and the New York Jets share MetLife Stadium as their home stadium.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,1507.52
+is the us womens soccer team in the world cup,"NOT ENOUGH INFO
+
+The context provided does not contain sufficient information to determine whether the US Women's Soccer Team (USWNT) is currently in the World Cup. The context mentions the USWNT's activities in 2017 and their preparation for World Cup Qualifying in fall 2018, but it does not specify if they are currently participating in the World Cup.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,0.6,2998.41

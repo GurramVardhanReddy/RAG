@@ -1,0 +1,71 @@
+{
+  "total_queries": 1,
+  "export_timestamp": "2026-05-05T18:39:39.549017",
+  "summary": {
+    "pipeline_performance": {
+      "avg_end_to_end_time": 6.195906000000832,
+      "avg_query_to_vector_time": 0.3166323999994347,
+      "avg_similarity_search_time": 0.05072710000058578,
+      "avg_generation_time": 5.809547899998506,
+      "avg_explainability_generation_time": 0.01777790000051027,
+      "end_to_end_stats": {
+        "min": 6.195906000000832,
+        "max": 6.195906000000832,
+        "avg": 6.195906000000832
+      }
+    },
+    "retrieval_quality": {
+      "avg_hit_rate": 0.0,
+      "avg_mrr": 0.0,
+      "avg_recall_at_k": 0.0,
+      "avg_precision_at_k": 0.0,
+      "avg_ndcg_at_k": 0.0
+    },
+    "response_quality": {
+      "avg_correctness": 0.0,
+      "avg_relevancy": 0.6590909090909091,
+      "avg_faithfulness": 0.5724137931034483
+    },
+    "explainability_quality": {
+      "avg_citation_accuracy": 0.0,
+      "avg_provenance_completeness": 0.0
+    },
+    "resource_usage": {
+      "avg_memory_mb": -7.31640625,
+      "avg_token_count": 1587.0,
+      "avg_chunks_retrieved": 10.0
+    }
+  },
+  "records": [
+    {
+      "query_id": "71d050d3",
+      "query_text": "Is the sub-fund seeking derogations from the following Regulations? Yes/No a) Regulation 70 b) Regulation 71 (For Index Funds) c) Regulation 72 and/or d) Regulation 73 (For Investment in UCITS and other Collective Investment Undertakings) If yes, confirm that a request for the derogation(s) is(are) set out in the letter seeking approval of the sub-fund(s)",
+      "timestamp": "2026-05-05T18:35:59.034385",
+      "document_loading_time": 0.0,
+      "chunking_time": 0.0,
+      "embedding_time": 0.0,
+      "query_to_vector_time": 0.3166323999994347,
+      "similarity_search_time": 0.05072710000058578,
+      "generation_time": 5.809547899998506,
+      "explainability_generation_time": 0.01777790000051027,
+      "reranking_time": 0.0,
+      "end_to_end_time": 6.195906000000832,
+      "hit_rate": 0.0,
+      "mrr": 0.0,
+      "recall_at_k": 0.0,
+      "precision_at_k": 0.0,
+      "ndcg_at_k": 0.0,
+      "correctness_score": 0.0,
+      "relevancy_score": 0.6590909090909091,
+      "faithfulness_score": 0.5724137931034483,
+      "citation_accuracy": 0.0,
+      "provenance_completeness": 0.0,
+      "confidence_calibration_ece": 0.0,
+      "memory_used_mb": -7.31640625,
+      "token_count_prompt": 1587,
+      "chunks_retrieved": 10,
+      "chunks_used_in_prompt": 10,
+      "cost_per_query": 0.0
+    }
+  ]
+}

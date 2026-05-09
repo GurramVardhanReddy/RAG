@@ -1,0 +1,6 @@
+question,generated_answer,ground_truth,dataset,type,hit_rate,mrr,precision_at_k,exact_match,f1,rouge_l,answer_contains,faithfulness,relevancy,correctness,confidence_score,end_to_end_ms
+Were Scott Derrickson and Ed Wood of the same nationality?,Information not found.,yes,hotpotqa,multi_hop,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.15,1424.68
+What government position was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?,Information not found.,Chief of Protocol,hotpotqa,multi_hop,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.15,1514.78
+"What science fantasy young adult series, told in first person, has a set of companion books narrating the stories of enslaved worlds and alien species?",Information not found.,Animorphs,hotpotqa,multi_hop,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.15,1116.56
+Are the Laleli Mosque and Esma Sultan Mansion located in the same neighborhood?,Information not found.,no,hotpotqa,multi_hop,1.0,0.2,0.2,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.15,1842.48
+"The director of the romantic comedy ""Big Stone Gap"" is based in what New York city?",Information not found.,"Greenwich Village, New York City",hotpotqa,multi_hop,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.15,1219.2

@@ -1,0 +1,16 @@
+question,generated_answer,ground_truth,dataset,type,hit_rate,mrr,precision_at_k,exact_match,f1,rouge_l,answer_contains,faithfulness,relevancy,correctness,confidence_score,end_to_end_ms
+does ethanol take more energy make that produces,"REFUTES
+
+The context provided in Source 1 indicates that ethanol production, particularly from corn and sugarcane, results in a positive energy balance. For corn ethanol, one unit of fossil-fuel energy produces 1.3 units of energy, and for sugarcane ethanol, one unit of fossil-fuel energy produces 8 to 9 units of energy. Therefore, ethanol production does not take more energy to make than it produces.",False,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.6,1354.68
+is house tax and property tax are same,"SUPPORTS
+
+The context from Source 1 indicates that ""Property tax or 'house tax' is a local tax on buildings, along with appurtenant land,"" suggesting that the terms ""house tax"" and ""property tax"" are used interchangeably, thus supporting the claim that they are the same.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.6,959.01
+is pain experienced in a missing body part or paralyzed area,"SUPPORTS
+
+The context from Source 1 describes phantom pain sensations as perceptions experienced in a limb or organ that is not physically part of the body, which can occur following limb loss, nerve avulsion, or spinal cord injury. This supports the claim that pain can be experienced in a missing body part or paralyzed area.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.6,1357.92
+is harry potter and the escape from gringotts a roller coaster ride,"SUPPORTS
+
+The context from Source 1 confirms that ""Harry Potter and the Escape from Gringotts"" is indeed an indoor steel roller coaster at Universal Studios Florida.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.6,894.91
+is there a difference between hydroxyzine hcl and hydroxyzine pam,"SUPPORTS
+
+The context from Source 1 confirms that there is a difference between hydroxyzine HCl (hydrochloride) and hydroxyzine pam (pamoate), as it lists different preparations for each salt form, indicating they are distinct formulations.",True,boolq,fact_verification,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.6,1343.82
