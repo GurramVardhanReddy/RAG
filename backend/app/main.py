@@ -1,5 +1,10 @@
 """
 Explainable RAG — FastAPI Application Entry Point
+
+Updated for hybrid retrieval pipeline:
+    - Dense encoder (BGE) + Sparse encoder (SPLADE) initialized at startup
+    - HybridRetriever instance stored on app.state for use in routes
+    - Cross-encoder reranker (BGE-reranker-base) loaded at startup
 """
 
 from fastapi import FastAPI
@@ -10,6 +15,7 @@ from backend.app.core.config import get_settings
 from backend.app.api.routes import router as api_router
 from backend.app.services.vector_store import VectorStoreService
 from backend.rag.embedding.embedder import get_embedding_model
+from backend.rag.retrieval.retriever import HybridRetriever
 
 settings = get_settings()
 
@@ -19,7 +25,7 @@ def create_app() -> FastAPI:
     application = FastAPI(
         title="Explainable RAG API",
         description="Information Retrieval Using Explainable Retrieval-Augmented Generation",
-        version="0.1.0",
+        version="0.2.0",
         docs_url="/docs",
         redoc_url="/redoc",
     )
@@ -39,12 +45,12 @@ def create_app() -> FastAPI:
     # --- Startup event ---
     @application.on_event("startup")
     async def startup():
-        logger.info("Starting Explainable RAG API...")
+        logger.info("Starting Explainable RAG API v0.2.0 (Hybrid Retrieval)...")
 
-        # 1. Initialize embedding model (downloads on first run)
-        logger.info(f"Loading embedding model: {settings.embedding_model}")
+        # 1. Initialize dense embedding model (downloads on first run)
+        logger.info(f"Loading dense embedding model: {settings.embedding_model}")
         application.state.embedding_model = get_embedding_model(settings.embedding_model)
-        logger.info("Embedding model loaded!")
+        logger.info("Dense embedding model loaded!")
 
         # 2. Connect to Qdrant
         vector_store = VectorStoreService(
@@ -58,7 +64,32 @@ def create_app() -> FastAPI:
             vector_store.ensure_collection()
         application.state.vector_store = vector_store
 
-        logger.info("Explainable RAG API ready!")
+        # 3. Initialize the hybrid retriever
+        retriever = HybridRetriever(
+            vector_store=vector_store,
+            embedding_model=application.state.embedding_model,
+            sparse_model_name=settings.sparse_model,
+            reranker_model_name=settings.reranker_model,
+            use_hybrid=settings.use_hybrid,
+            use_reranker=settings.use_reranker,
+            prefetch_limit=settings.prefetch_limit,
+        )
+
+        # 4. Load sparse encoder (SPLADE)
+        if settings.use_hybrid:
+            logger.info(f"Loading sparse model: {settings.sparse_model}")
+            retriever.init_sparse_encoder()
+            logger.info("Sparse encoder (SPLADE) loaded!")
+
+        # 5. Load cross-encoder reranker
+        if settings.use_reranker:
+            logger.info(f"Loading reranker: {settings.reranker_model}")
+            retriever.init_reranker()
+            logger.info("Cross-encoder reranker loaded!")
+
+        application.state.retriever = retriever
+
+        logger.info("Explainable RAG API ready! (Hybrid: Dense + Sparse → RRF → Rerank)")
 
     # --- Health check ---
     @application.get("/health")
@@ -66,8 +97,13 @@ def create_app() -> FastAPI:
         vs_info = application.state.vector_store.get_collection_info()
         return {
             "status": "healthy",
-            "version": "0.1.0",
+            "version": "0.2.0",
             "embedding_model": settings.embedding_model,
+            "sparse_model": settings.sparse_model if settings.use_hybrid else "disabled",
+            "reranker_model": settings.reranker_model if settings.use_reranker else "disabled",
+            "retrieval_mode": "hybrid_rrf_reranked" if (settings.use_hybrid and settings.use_reranker)
+                             else "hybrid_rrf" if settings.use_hybrid
+                             else "dense_only",
             "vector_db": vs_info,
         }
 

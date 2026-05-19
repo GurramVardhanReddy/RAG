@@ -3,10 +3,23 @@ Vector Store Service
 
 Manages all interactions with the Qdrant vector database:
 - Connection management
-- Collection creation
+- Collection creation with NAMED VECTORS (dense + sparse)
 - Document storage (with paragraph metadata)
-- Similarity search with filtering
+- Dense-only search (backward compatible)
+- Hybrid search with RRF fusion (dense + sparse)
 - Document deletion
+
+Updated for hybrid retrieval:
+    The collection now stores two vector types per point:
+    - "dense": 768-dim BGE embeddings (cosine similarity)
+    - "sparse": SPLADE sparse vectors (dot product)
+
+    Qdrant's native prefetch + RRF fusion runs both searches
+    server-side in a single query_points() call.
+
+References:
+    - Wang et al., "BERT-based Dense Retrievers Require Interpolation
+      with BM25 for Effective Passage Retrieval" (ICTIR 2021)
 """
 
 import uuid
@@ -15,10 +28,17 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
     VectorParams,
+    SparseVectorParams,
     PointStruct,
+    SparseVector,
     Filter,
     FieldCondition,
     MatchValue,
+    Prefetch,
+    FusionQuery,
+    Fusion,
+    NamedVector,
+    NamedSparseVector,
 )
 from loguru import logger
 
@@ -26,6 +46,7 @@ from loguru import logger
 class VectorStoreService:
     """
     Manages the Qdrant vector database connection and operations.
+    Supports hybrid retrieval with dense + sparse named vectors.
     """
 
     def __init__(
@@ -53,7 +74,13 @@ class VectorStoreService:
             self.client = None
 
     def ensure_collection(self):
-        """Create the collection if it doesn't exist."""
+        """
+        Create the collection with named vectors if it doesn't exist.
+
+        Vector config:
+            - "dense": BGE embeddings (768d, cosine)
+            - "sparse": SPLADE sparse vectors (dot product, variable dim)
+        """
         if self.client is None:
             logger.warning("Qdrant not connected, skipping collection creation")
             return
@@ -64,31 +91,41 @@ class VectorStoreService:
         if not exists:
             self.client.create_collection(
                 collection_name=self.collection_name,
-                vectors_config=VectorParams(
-                    size=self.embedding_dimension,
-                    distance=Distance.COSINE,
-                ),
+                vectors_config={
+                    "dense": VectorParams(
+                        size=self.embedding_dimension,
+                        distance=Distance.COSINE,
+                    ),
+                },
+                sparse_vectors_config={
+                    "sparse": SparseVectorParams(),
+                },
             )
-            logger.info(f"Created collection '{self.collection_name}' ({self.embedding_dimension}d, cosine)")
+            logger.info(
+                f"Created collection '{self.collection_name}' "
+                f"(dense: {self.embedding_dimension}d cosine + sparse: SPLADE)"
+            )
         else:
             logger.info(f"Collection '{self.collection_name}' already exists")
 
     def add_documents(
         self,
         chunks: list,
-        vectors: list[list[float]],
+        dense_vectors: list[list[float]],
+        sparse_vectors: list,
         document_id: str,
         page_paragraphs: dict = None,
     ):
         """
-        Store document chunks with their vectors and metadata in Qdrant.
+        Store document chunks with both dense and sparse vectors.
 
         Args:
             chunks: List of Document objects (from chunking)
-            vectors: List of embedding vectors
+            dense_vectors: List of dense embedding vectors (768d)
+            sparse_vectors: List of SparseEmbedding objects from fastembed
+                           Each has .indices and .values arrays
             document_id: Unique document identifier
             page_paragraphs: Dict mapping page numbers to paragraph lists
-                             e.g., {0: [{"paragraph_number": 1, "text": "..."}, ...]}
         """
         if self.client is None:
             logger.error("Qdrant not connected")
@@ -98,7 +135,9 @@ class VectorStoreService:
             page_paragraphs = {}
 
         points = []
-        for i, (chunk, vector) in enumerate(zip(chunks, vectors)):
+        for i, (chunk, dense_vec, sparse_vec) in enumerate(
+            zip(chunks, dense_vectors, sparse_vectors)
+        ):
             page_num = chunk.metadata.get("page", -1)
 
             # Find which paragraph this chunk belongs to
@@ -109,7 +148,13 @@ class VectorStoreService:
 
             point = PointStruct(
                 id=str(uuid.uuid4()),
-                vector=vector,
+                vector={
+                    "dense": dense_vec,
+                    "sparse": SparseVector(
+                        indices=sparse_vec.indices.tolist(),
+                        values=sparse_vec.values.tolist(),
+                    ),
+                },
                 payload={
                     "text": chunk.page_content,
                     "page_number": page_num,
@@ -134,7 +179,7 @@ class VectorStoreService:
 
         logger.info(
             f"Stored {len(points)} chunks for document '{document_id}' "
-            f"(with paragraph tracking)"
+            f"(dense + sparse vectors, with paragraph tracking)"
         )
 
     def _find_paragraph_for_chunk(
@@ -150,49 +195,43 @@ class VectorStoreService:
                 "match_type": "no_paragraphs",
             }
 
-        chunk_clean = chunk_text.strip().lower()
-        matching_paras = []
-
-        for para in page_paragraphs:
-            para_clean = para["text"].strip().lower()
-
-            # Exact containment
-            if chunk_clean in para_clean:
-                return {
-                    "paragraph_number": para["paragraph_number"],
-                    "paragraph_numbers": [para["paragraph_number"]],
-                    "match_type": "exact",
-                }
-            if para_clean in chunk_clean:
-                matching_paras.append(para["paragraph_number"])
-            elif len(chunk_clean) > 0 and len(para_clean) > 0:
-                chunk_start = chunk_clean[:100]
-                if chunk_start in para_clean:
-                    matching_paras.append(para["paragraph_number"])
-
-        if matching_paras:
-            return {
-                "paragraph_number": matching_paras[0],
-                "paragraph_numbers": matching_paras,
-                "match_type": "partial" if len(matching_paras) > 1 else "exact",
-            }
-
-        # Best effort: word overlap
-        best_para = -1
+        matched_paragraphs = []
         best_overlap = 0
-        chunk_words = set(chunk_clean.split())
-        for para in page_paragraphs:
-            para_words = set(para["text"].lower().split())
-            overlap = len(chunk_words & para_words)
-            if overlap > best_overlap:
-                best_overlap = overlap
-                best_para = para["paragraph_number"]
+        best_para_num = -1
 
-        return {
-            "paragraph_number": best_para,
-            "paragraph_numbers": [best_para] if best_para > 0 else [],
-            "match_type": "best_effort",
-        }
+        for para in page_paragraphs:
+            para_text = para.get("text", "")
+            para_num = para.get("paragraph_number", -1)
+
+            if not para_text:
+                continue
+
+            # Simple overlap: check if chunk text contains paragraph text or vice versa
+            overlap = len(set(chunk_text.split()) & set(para_text.split()))
+            if overlap > 0:
+                matched_paragraphs.append(para_num)
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    best_para_num = para_num
+
+        if len(matched_paragraphs) == 0:
+            return {
+                "paragraph_number": -1,
+                "paragraph_numbers": [],
+                "match_type": "no_match",
+            }
+        elif len(matched_paragraphs) == 1:
+            return {
+                "paragraph_number": matched_paragraphs[0],
+                "paragraph_numbers": matched_paragraphs,
+                "match_type": "exact",
+            }
+        else:
+            return {
+                "paragraph_number": best_para_num,
+                "paragraph_numbers": matched_paragraphs,
+                "match_type": "multi_paragraph",
+            }
 
     def search(
         self,
@@ -201,13 +240,14 @@ class VectorStoreService:
         document_id: str = None,
     ) -> list[dict]:
         """
-        Search for similar chunks. Returns results with page AND paragraph numbers.
+        Dense-only search (backward compatible).
+
+        Uses the "dense" named vector for cosine similarity search.
         """
         if self.client is None:
             logger.error("Qdrant not connected")
             return []
 
-        # Build filter
         search_filter = None
         if document_id:
             search_filter = Filter(
@@ -222,6 +262,7 @@ class VectorStoreService:
         results = self.client.query_points(
             collection_name=self.collection_name,
             query=query_vector,
+            using="dense",
             limit=top_k,
             query_filter=search_filter,
             with_payload=True,
@@ -238,6 +279,92 @@ class VectorStoreService:
                 "document_id": hit.payload.get("document_id", ""),
                 "chunk_index": hit.payload.get("chunk_index", 0),
                 "score": hit.score,
+                "retrieval_method": "dense",
+            }
+            for hit in results.points
+        ]
+
+    def hybrid_search(
+        self,
+        dense_vector: list[float],
+        sparse_vector,
+        top_k: int = 5,
+        prefetch_limit: int = 20,
+        document_id: str = None,
+    ) -> list[dict]:
+        """
+        Hybrid search using Qdrant's native RRF (Reciprocal Rank Fusion).
+
+        Runs dense and sparse searches in parallel via prefetch,
+        then fuses results server-side using RRF.
+
+        Args:
+            dense_vector: BGE dense embedding (768d)
+            sparse_vector: SparseEmbedding from fastembed (.indices, .values)
+            top_k: Number of final results after fusion
+            prefetch_limit: Number of candidates from each retriever
+                           before fusion (higher = better recall, slower)
+            document_id: Optional filter to search within one document
+
+        Returns:
+            List of result dicts with RRF-fused scores
+        """
+        if self.client is None:
+            logger.error("Qdrant not connected")
+            return []
+
+        # Build optional document filter
+        search_filter = None
+        if document_id:
+            search_filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="document_id",
+                        match=MatchValue(value=document_id),
+                    )
+                ]
+            )
+
+        # Convert fastembed SparseEmbedding to Qdrant SparseVector
+        qdrant_sparse = SparseVector(
+            indices=sparse_vector.indices.tolist(),
+            values=sparse_vector.values.tolist(),
+        )
+
+        # Prefetch from both retrievers, then fuse with RRF
+        results = self.client.query_points(
+            collection_name=self.collection_name,
+            prefetch=[
+                Prefetch(
+                    query=dense_vector,
+                    using="dense",
+                    limit=prefetch_limit,
+                    filter=search_filter,
+                ),
+                Prefetch(
+                    query=qdrant_sparse,
+                    using="sparse",
+                    limit=prefetch_limit,
+                    filter=search_filter,
+                ),
+            ],
+            query=FusionQuery(fusion=Fusion.RRF),
+            limit=top_k,
+            with_payload=True,
+        )
+
+        return [
+            {
+                "text": hit.payload.get("text", ""),
+                "page_number": hit.payload.get("page_number", -1),
+                "paragraph_number": hit.payload.get("paragraph_number", -1),
+                "paragraph_numbers": hit.payload.get("paragraph_numbers", []),
+                "paragraph_match_type": hit.payload.get("paragraph_match_type", "unknown"),
+                "source": hit.payload.get("source", ""),
+                "document_id": hit.payload.get("document_id", ""),
+                "chunk_index": hit.payload.get("chunk_index", 0),
+                "score": hit.score,
+                "retrieval_method": "hybrid_rrf",
             }
             for hit in results.points
         ]
@@ -270,6 +397,7 @@ class VectorStoreService:
                 "collection": self.collection_name,
                 "vectors_count": info.vectors_count,
                 "points_count": info.points_count,
+                "vector_config": "dense (768d cosine) + sparse (SPLADE)",
             }
         except Exception:
             return {"status": "connected", "collection": "not_created"}

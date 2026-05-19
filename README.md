@@ -1,49 +1,150 @@
-# Explainable RAG - Information Retrieval Using Explainable Retrieval-Augmented Generation
+# Explainable RAG — Information Retrieval Using Explainable Retrieval-Augmented Generation
 
 ## Overview
-A production-ready RAG (Retrieval-Augmented Generation) system with built-in explainability features. Users can upload documents, ask questions, and receive answers with transparent source attribution, confidence scores, and retrieval explanations.
+
+A production-ready **multimodal RAG** system with built-in explainability for financial document compliance. Users can upload PDF documents containing text, tables, charts, and images — ask questions — and receive answers with transparent source attribution, confidence scores, page/paragraph references, and retrieval explanations.
+
+The system automates answers to **Section 10 UCITS Application Form** questions using Supplement documents, while providing the provenance tracking required for regulatory transparency.
+
+## Architecture
+
+```
+                          ┌─────────────────┐
+                          │  PDF/DOCX Upload │
+                          └────────┬────────┘
+                                   │
+                          ┌────────▼────────┐
+                          │ Document Loader  │
+                          │ (PyPDF/fallback) │
+                          └────────┬────────┘
+                                   │
+                    ┌──────────────┴──────────────┐
+                    │                             │
+           ┌────────▼────────┐          ┌─────────▼─────────┐
+           │ Semantic Chunker│          │ Multimodal Extractor│
+           │ + Paragraph     │          │ (unstructured)      │
+           │   Detection     │          │ Tables / Images     │
+           └────────┬────────┘          └─────────┬──────────┘
+                    │                             │
+           ┌────────▼────────┐          ┌─────────▼──────────┐
+           │ Dense + Sparse  │          │ GPT-4o Summarize   │
+           │ Embeddings      │          │ + Dense + Sparse   │
+           │ (BGE + SPLADE)  │          │   Embeddings       │
+           └────────┬────────┘          └─────────┬──────────┘
+                    │                             │
+                    └──────────────┬──────────────┘
+                                   │
+                          ┌────────▼────────┐
+                          │     Qdrant      │
+                          │  (Named Vectors)│
+                          └────────┬────────┘
+                                   │
+               ════════════════════╪═══════════════════════
+                            QUERY PIPELINE
+                                   │
+                          ┌────────▼────────┐
+                          │  User Question  │
+                          └────────┬────────┘
+                                   │
+                          ┌────────▼────────┐
+                          │ Hybrid Retrieval│
+                          │ Dense + Sparse  │
+                          │  → RRF → Rerank │
+                          └────────┬────────┘
+                                   │
+                          ┌────────▼────────┐
+                          │ GPT-4o Generate │
+                          └────────┬────────┘
+                                   │
+                          ┌────────▼────────┐
+                          │ Explainability  │
+                          │ Engine          │
+                          │ (confidence,    │
+                          │  page/para refs)│
+                          └─────────────────┘
+```
 
 ## Project Structure
 
 ```
 explainable-rag/
 │
-├── backend/                    # Python FastAPI backend
-│   ├── app/                    # Application layer
-│   │   ├── api/routes.py       # API endpoints (upload, query)
-│   │   ├── core/config.py      # Settings from .env
-│   │   ├── services/           # Vector store, document loader
-│   │   └── main.py             # FastAPI entry point
-│   ├── rag/                    # RAG pipeline modules
-│   │   ├── chunking/           # Document chunking strategies
-│   │   ├── embedding/          # Embedding model management
-│   │   ├── retrieval/          # Vector search & hybrid retrieval
-│   │   ├── generation/         # LLM response generation
-│   │   └── explainability/     # Confidence scoring & attribution
-│   └── tests/                  # Unit & integration tests
+├── backend/
+│   ├── app/
+│   │   ├── api/routes.py              # API endpoints (upload, query, metrics)
+│   │   ├── core/config.py             # Settings from .env
+│   │   ├── services/
+│   │   │   ├── document_loader.py     # PDF/DOCX loading with fallback
+│   │   │   └── vector_store.py        # Qdrant operations (named vectors)
+│   │   └── main.py                    # FastAPI entry point
+│   │
+│   ├── rag/
+│   │   ├── chunking/
+│   │   │   └── chunker.py             # Semantic + recursive chunking
+│   │   ├── embedding/
+│   │   │   └── embedder.py            # BGE embedding model
+│   │   ├── retrieval/
+│   │   │   ├── retriever.py           # Hybrid retriever (Dense + Sparse → RRF → Rerank)
+│   │   │   └── sparse_encoder.py      # SPLADE sparse encoding
+│   │   ├── generation/
+│   │   │   └── generator.py           # GPT-4o response generation
+│   │   ├── explainability/
+│   │   │   └── engine.py              # Confidence scoring + attribution
+│   │   ├── multimodal/                # NEW — Multimodal processing
+│   │   │   ├── __init__.py
+│   │   │   └── processor.py           # Extract tables/images, GPT-4o summaries
+│   │   └── metrics/
+│   │       └── tracker.py             # Pipeline metrics (5 categories)
+│   │
+│   ├── evaluation/
+│   │   └── runner.py                  # Benchmark evaluation framework
+│   └── tests/
 │
-├── frontend/                   # React web application (Step 4)
-├── docker/                     # Docker configuration files
-├── data/uploads/               # Uploaded documents (gitignored)
-├── docker-compose.yml          # Orchestration for all services
-└── .env                        # Environment variables (gitignored)
+├── frontend/                          # React web application (planned)
+├── docker/
+├── data/
+│   ├── uploads/                       # Uploaded documents
+│   └── extracted_visuals/             # Extracted table/image files
+├── metrics_output/                    # Query metrics JSON/CSV exports
+├── docker-compose.yml
+├── .env
+└── README.md
 ```
 
 ## Tech Stack
-- **Backend:** Python 3.12, FastAPI
-- **RAG Pipeline:** LangChain, HuggingFace Transformers
-- **Vector Database:** Qdrant (open source, Docker)
-- **Embedding Model:** BAAI/bge-base-en-v1.5 (768 dimensions)
-- **LLM:** OpenAI GPT-4o
-- **Frontend:** React (planned)
-- **Deployment:** Docker, AWS (planned)
+
+| Component         | Technology                               |
+| ----------------- | ---------------------------------------- |
+| Backend           | Python 3.12, FastAPI                     |
+| Dense Embeddings  | BAAI/bge-base-en-v1.5 (768d)             |
+| Sparse Embeddings | prithivida/Splade_PP_en_v1               |
+| Reranker          | BAAI/bge-reranker-base                   |
+| Vector Database   | Qdrant (named vectors: dense + sparse)   |
+| LLM               | OpenAI GPT-4o                            |
+| Multimodal        | unstructured (PDF layout), GPT-4o vision |
+| Frontend          | React (planned)                          |
+| Deployment        | Docker, AWS (planned)                    |
+
+## Key Features
+
+**Multimodal RAG** — Extracts tables, charts, and images from PDFs using `unstructured`'s hi-res layout analysis. Each visual element is summarized by GPT-4o into a brief, searchable description and embedded alongside text chunks. When a user asks about data in a table or trend in a chart, the system retrieves both text and visual summaries.
+
+**Hybrid Retrieval** — Combines dense semantic search (BGE embeddings) with sparse lexical search (SPLADE) using Reciprocal Rank Fusion, then reranks with a cross-encoder (BGE reranker). This addresses the known limitation that dense retrieval alone is insufficient for full recall (Wang et al., 2021).
+
+**Explainability** — Every answer includes page numbers, paragraph references, confidence scores, and retrieval method metadata. Provenance tracking directly addresses failure points FP2–FP4 of the seven RAG failure modes (Barnett et al., CAIN 2024).
+
+**Robust PDF Loading** — Primary extraction via PyPDFLoader with automatic fallback to `unstructured` when pages return empty (handles scanned PDFs and unusual encodings).
+
+**Comprehensive Metrics** — Five metric categories tracked per query: pipeline performance timing, retrieval quality, response quality, explainability quality, and resource efficiency. Exportable to JSON/CSV for analysis.
 
 ## Getting Started
 
 ### Prerequisites
+
 - Python 3.11+
 - Docker Desktop (for Qdrant)
 - OpenAI API key
+- Poppler (for PDF image extraction on Windows)
 
 ### Setup
 
@@ -61,6 +162,7 @@ pip install fastapi uvicorn[standard] python-multipart python-dotenv loguru pyda
 pip install langchain langchain-community langchain-core langchain-text-splitters langchain-experimental langchain-openai langchain-huggingface
 pip install pypdf python-docx sentence-transformers rank-bm25
 pip install qdrant-client langchain-qdrant
+pip install "unstructured[pdf]"
 pip install pytest pytest-asyncio httpx
 
 # 4. Copy env file and add your OpenAI key
@@ -77,8 +179,8 @@ uvicorn backend.app.main:app --reload
 ### Usage
 
 1. Open **http://localhost:8000/docs** (Swagger UI)
-2. **Upload a document:** Use `POST /api/v1/upload` → upload your PDF
-3. **Ask a question:** Use `POST /api/v1/query` with:
+2. **Upload a document:** `POST /api/v1/upload` → upload your PDF
+3. **Ask a question:** `POST /api/v1/query` with:
    ```json
    {
      "question": "Is the Fund an exchange-traded fund?",
@@ -86,10 +188,38 @@ uvicorn backend.app.main:app --reload
      "top_k": 5
    }
    ```
-4. **Get answer + explainability:** Response includes the answer, source chunks, confidence score, and retrieval metadata
+4. **Response includes:** answer, source chunks with page/paragraph numbers, confidence score, retrieval timings, and full metrics breakdown
 
-### Qdrant Dashboard
-Visit **http://localhost:6333/dashboard** to see your stored vectors and collections.
+### API Endpoints
+
+| Method | Endpoint                 | Description                                    |
+| ------ | ------------------------ | ---------------------------------------------- |
+| POST   | `/api/v1/upload`         | Upload and process a document (text + visuals) |
+| POST   | `/api/v1/query`          | Ask a question with full explainability        |
+| GET    | `/api/v1/documents`      | List all processed documents                   |
+| GET    | `/api/v1/metrics`        | View aggregated query metrics                  |
+| GET    | `/api/v1/metrics/export` | Export metrics to JSON/CSV                     |
+| GET    | `/health`                | Health check with vector DB status             |
+
+### Dashboards
+
+- **Swagger UI:** http://localhost:8000/docs
+- **Qdrant Dashboard:** http://localhost:6333/dashboard
+
+## Research Context
+
+This system is part of an MSc Data Analytics practicum project at Dublin City University, supervised by Dr. Irina Tal. It sits at the intersection of applied NLP, explainability research, and financial compliance.
+
+### Key Literature
+
+- Lewis et al. — Original RAG framework
+- Barnett et al. (CAIN 2024) — Seven failure points in RAG systems
+- Joshi et al. (ICAAIC 2024) — Robust multimodal RAG for documents with text, tables, and images
+- Wang et al. — BM25 interpolation for dense retrieval
+- Khattab & Zaharia — ColBERT late interaction
+- Adadi & Berrada — XAI survey (Peeking Inside the Black-Box)
+- Salemi & Zamani (SIGIR 2024) — Evaluating retrieval quality in RAG
 
 ## Author
-Jaswanth — MSc Data Analytics, Dublin City University
+
+**Jaswanth** — MSc Data Analytics, Dublin City University (Student ID: A00052520)

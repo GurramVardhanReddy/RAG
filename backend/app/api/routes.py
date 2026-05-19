@@ -1,10 +1,11 @@
 """
 API route definitions for the Explainable RAG system.
 
-Integrates:
-- Document upload with paragraph detection
-- Query with page + paragraph attribution
-- Full metrics tracking per query
+Updated for hybrid retrieval pipeline:
+- Upload: generates BOTH dense (BGE) + sparse (SPLADE) vectors
+- Query: uses HybridRetriever (Dense + Sparse → RRF → Rerank)
+- Explainability: reports actual retrieval method used
+- Multimodal: extracts tables/images, summarizes via GPT-4o, embeds into Qdrant
 """
 
 import os
@@ -21,7 +22,9 @@ from backend.app.core.config import get_settings
 from backend.rag.chunking.chunker import recursive_chunk, semantic_chunk
 from backend.rag.generation.generator import generate_answer, build_context
 from backend.rag.explainability.engine import ExplainabilityEngine
+from backend.rag.retrieval.sparse_encoder import encode_sparse
 from backend.rag.metrics.tracker import RAGMetricsTracker, ResponseQualityMetrics, ResourceMetrics
+from backend.rag.multimodal.processor import extract_and_embed_visuals
 
 router = APIRouter()
 settings = get_settings()
@@ -56,7 +59,7 @@ class SourceChunk(BaseModel):
     paragraph_match_type: str = "unknown"
     chunk_index: int = 0
     relevance_score: float = 0.0
-    retrieval_method: str = "vector_search_cosine"
+    retrieval_method: str = "hybrid_rrf_reranked"
 
 
 class ExplainabilityInfo(BaseModel):
@@ -66,6 +69,7 @@ class ExplainabilityInfo(BaseModel):
     retrieval_strategy: str
     total_chunks_searched: int
     processing_time_ms: float
+    retrieval_timings: Optional[dict] = None
 
 
 class MetricsInfo(BaseModel):
@@ -97,6 +101,9 @@ class UploadResponse(BaseModel):
     total_paragraphs: int
     processing_time_ms: float
     message: str
+    visual_tables: int = 0
+    visual_images: int = 0
+    visual_chunks: int = 0
 
 
 # =====================
@@ -107,7 +114,9 @@ class UploadResponse(BaseModel):
 async def upload_document(request: Request, file: UploadFile = File(...)):
     """
     Upload a PDF/DOCX document.
-    Chunks it, embeds it, stores in vector DB with paragraph metadata.
+    Chunks it, generates DENSE + SPARSE embeddings, stores in Qdrant
+    with paragraph metadata. For PDFs, also extracts tables/images
+    and stores their GPT-4o summaries as additional searchable chunks.
     """
     start_time = time.time()
 
@@ -144,18 +153,46 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
     embedding_model = request.app.state.embedding_model
     chunks = semantic_chunk(docs, embedding_model=embedding_model)
 
-    # 5. Generate embeddings
+    # 5. Generate DENSE embeddings (BGE)
     chunk_texts = [chunk.page_content for chunk in chunks]
-    vectors = embedding_model.embed_documents(chunk_texts)
+    dense_vectors = embedding_model.embed_documents(chunk_texts)
+    logger.info(f"Generated {len(dense_vectors)} dense vectors")
 
-    # 6. Store in Qdrant (with paragraph metadata)
-    vector_store: VectorStoreService = request.app.state.vector_store
+    # 6. Generate SPARSE embeddings (SPLADE)
+    sparse_vectors = encode_sparse(chunk_texts, model_name=settings.sparse_model)
+    logger.info(f"Generated {len(sparse_vectors)} sparse vectors")
+
+    # 7. Store in Qdrant (both dense + sparse vectors with paragraph metadata)
+    vector_store = request.app.state.vector_store
     vector_store.add_documents(
-        chunks, vectors, document_id,
+        chunks=chunks,
+        dense_vectors=dense_vectors,
+        sparse_vectors=sparse_vectors,
+        document_id=document_id,
         page_paragraphs=page_paragraphs,
     )
 
-    # 7. Register document
+    # 8. Multimodal extraction (tables, images, graphs) — PDFs only
+    visual_stats = {"tables": 0, "images": 0, "chunks_added": 0}
+    if ext == ".pdf":
+        try:
+            visual_stats = extract_and_embed_visuals(
+                file_path=save_path,
+                document_id=document_id,
+                openai_api_key=settings.openai_api_key,
+                embedding_model=request.app.state.embedding_model,
+                vector_store=request.app.state.vector_store,
+                sparse_encoder=getattr(request.app.state, 'sparse_encoder', None),
+                output_dir=f"data/extracted_visuals/{document_id}",
+            )
+            logger.info(
+                f"Multimodal: {visual_stats['tables']} tables, "
+                f"{visual_stats['images']} images extracted"
+            )
+        except Exception as e:
+            logger.warning(f"Multimodal extraction failed (non-fatal): {e}")
+
+    # 9. Register document
     processing_time = (time.time() - start_time) * 1000
     document_registry[document_id] = {
         "filename": filename,
@@ -163,16 +200,24 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
         "total_chunks": len(chunks),
         "total_paragraphs": total_paragraphs,
         "processing_time_ms": processing_time,
+        "vector_types": ["dense (BGE)", "sparse (SPLADE)"],
+        "visual_elements": visual_stats,
     }
 
     return UploadResponse(
         document_id=document_id,
         filename=filename,
         total_pages=len(docs),
-        total_chunks=len(chunks),
+        total_chunks=len(chunks) + visual_stats["chunks_added"],
         total_paragraphs=total_paragraphs,
         processing_time_ms=round(processing_time, 2),
-        message=f"Document processed: {len(docs)} pages, {len(chunks)} chunks, {total_paragraphs} paragraphs detected",
+        message=(
+            f"Document processed: {len(docs)} pages, {len(chunks)} text chunks, "
+            f"{visual_stats['tables']} tables, {visual_stats['images']} images"
+        ),
+        visual_tables=visual_stats["tables"],
+        visual_images=visual_stats["images"],
+        visual_chunks=visual_stats["chunks_added"],
     )
 
 
@@ -180,25 +225,30 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
 async def query_document(request: Request, body: QueryRequest):
     """
     Ask a question about an uploaded document.
+
+    Pipeline: Query → Dense + Sparse → RRF Fusion → Rerank → GPT-4o → Answer
+
     Returns answer with page/paragraph attribution and full metrics.
     """
     # --- Start metrics tracking ---
     metrics_record = metrics_tracker.start_query(body.question)
 
     vector_store: VectorStoreService = request.app.state.vector_store
-    embedding_model = request.app.state.embedding_model
+    retriever = request.app.state.retriever
 
-    # --- A1. Embed the query ---
+    # --- A1 + A2. Hybrid Retrieval (Dense + Sparse → RRF → Rerank) ---
     with metrics_tracker.timer.time_stage("query_to_vector"):
-        query_vector = embedding_model.embed_query(body.question)
+        pass
 
-    # --- A2. Similarity search ---
     with metrics_tracker.timer.time_stage("similarity_search"):
-        search_results = vector_store.search(
-            query_vector=query_vector,
+        retrieval_output = retriever.retrieve(
+            query=body.question,
             top_k=body.top_k,
             document_id=body.document_id,
         )
+
+    search_results = retrieval_output["results"]
+    retrieval_metadata = retrieval_output["metadata"]
 
     if not search_results:
         raise HTTPException(
@@ -223,26 +273,24 @@ async def query_document(request: Request, body: QueryRequest):
             scores, answer, body.question
         )
 
-        # Get collection info for total chunks
         collection_info = vector_store.get_collection_info()
         total_chunks = collection_info.get("points_count", 0)
 
-        # Build source chunks with paragraph info
         sources = [
             SourceChunk(
-                content=r["text"][:500],  # Truncate for response size
+                content=r["text"][:500],
                 page_number=r.get("page_number", -1),
                 paragraph_number=r.get("paragraph_number", -1),
                 paragraph_numbers=r.get("paragraph_numbers", []),
                 paragraph_match_type=r.get("paragraph_match_type", "unknown"),
                 chunk_index=r.get("chunk_index", 0),
                 relevance_score=round(r.get("score", 0.0), 4),
-                retrieval_method="vector_search_cosine",
+                retrieval_method=r.get("retrieval_method", retrieval_metadata["retrieval_method"]),
             )
             for r in search_results
         ]
 
-    # --- Compute response quality metrics (fallback/heuristic) ---
+    # --- Compute response quality metrics ---
     chunk_texts = [r["text"] for r in search_results]
     relevancy = ResponseQualityMetrics.relevancy_score(
         body.question, answer, chunk_texts
@@ -273,9 +321,10 @@ async def query_document(request: Request, body: QueryRequest):
         explainability=ExplainabilityInfo(
             sources_used=sources,
             confidence_score=round(confidence, 4),
-            retrieval_strategy="vector_search_cosine",
+            retrieval_strategy=retrieval_metadata["retrieval_method"],
             total_chunks_searched=total_chunks,
             processing_time_ms=round(end_to_end_ms, 2),
+            retrieval_timings=retrieval_metadata.get("timings", {}),
         ),
         metrics=MetricsInfo(
             query_to_vector_ms=round((metrics_record.query_to_vector_time) * 1000, 2),
@@ -303,7 +352,6 @@ async def get_metrics():
     Get aggregated metrics across all queries.
     Also exports to JSON file for analysis.
     """
-    # Export to file
     filepath = metrics_tracker.export_results()
     csv_path = metrics_tracker.export_csv()
 
@@ -312,7 +360,7 @@ async def get_metrics():
         "summary": metrics_tracker._compute_summary(),
         "exported_to": filepath,
         "csv_exported_to": csv_path,
-        "records": [r.to_dict() for r in metrics_tracker.records[-10:]],  # Last 10
+        "records": [r.to_dict() for r in metrics_tracker.records[-10:]],
     }
 
 

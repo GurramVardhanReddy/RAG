@@ -20,17 +20,23 @@ langchain-huggingface
 pypdf
 python-docx
 
-# === Embeddings & Models ===
+# === Dense Embeddings & Models ===
 sentence-transformers
 transformers
 torch>=2.0.0
 
+# === Sparse Embeddings (Hybrid Search) ===
+fastembed
+
 # === Vector Database ===
-qdrant-client
+qdrant-client>=1.7.0
 langchain-qdrant
 
 # === Retrieval ===
 rank-bm25
+
+# === System Monitoring ===
+psutil
 
 # === Testing ===
 pytest
