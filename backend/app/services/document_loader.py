@@ -3,6 +3,10 @@ Document Loading Module
 
 Loads PDF and DOCX files and enriches each page's metadata with
 paragraph-level tracking for explainability.
+
+PDF loading uses PyPDFLoader as primary, with automatic fallback
+to the 'unstructured' library when PyPDFLoader returns empty pages
+(common with scanned PDFs or unusual text encodings).
 """
 
 import os
@@ -74,11 +78,74 @@ def _enrich_with_paragraphs(documents: list[Document]) -> list[Document]:
     return enriched
 
 
+def _load_pdf_pypdf(file_path: str) -> list[Document]:
+    """Load PDF using PyPDFLoader (fast, works for most PDFs)."""
+    loader = PyPDFLoader(file_path)
+    return loader.load()
+
+
+def _load_pdf_unstructured(file_path: str) -> list[Document]:
+    """
+    Load PDF using the 'unstructured' library as fallback.
+    Handles scanned PDFs, complex layouts, and unusual encodings
+    that PyPDFLoader fails on.
+    """
+    from unstructured.partition.pdf import partition_pdf
+
+    logger.info("Using unstructured fallback for PDF text extraction")
+
+    elements = partition_pdf(
+        filename=file_path,
+        strategy="hi_res",
+    )
+
+    # Group text elements by page number
+    pages: dict[int, list[str]] = {}
+    for el in elements:
+        # Skip tables and images — those are handled by the multimodal processor
+        if el.category in ("Table", "Image"):
+            continue
+
+        page_num = getattr(el.metadata, "page_number", 1) or 1
+        # Convert to 0-indexed to match PyPDFLoader convention
+        page_idx = page_num - 1
+
+        if page_idx not in pages:
+            pages[page_idx] = []
+        
+        text = str(el).strip()
+        if text:
+            pages[page_idx].append(text)
+
+    # Build Document objects (one per page)
+    docs = []
+    for page_idx in sorted(pages.keys()):
+        page_text = "\n\n".join(pages[page_idx])
+        if page_text.strip():
+            docs.append(Document(
+                page_content=page_text,
+                metadata={"source": file_path, "page": page_idx},
+            ))
+
+    return docs
+
+
+def _is_empty(docs: list[Document]) -> bool:
+    """Check if all documents have empty or whitespace-only content."""
+    if not docs:
+        return True
+    total_chars = sum(len(d.page_content.strip()) for d in docs)
+    return total_chars == 0
+
+
 def load_document(file_path: str) -> list[Document]:
     """
     Load a document and enrich it with paragraph-level metadata.
 
     Supports: .pdf, .docx, .txt
+
+    For PDFs: tries PyPDFLoader first, falls back to 'unstructured'
+    if pages are empty (scanned PDFs, unusual encodings).
 
     Each returned Document has metadata:
     - source: file path
@@ -89,8 +156,17 @@ def load_document(file_path: str) -> list[Document]:
     ext = os.path.splitext(file_path)[1].lower()
 
     if ext == ".pdf":
-        loader = PyPDFLoader(file_path)
-        docs = loader.load()
+        # Try PyPDFLoader first (faster)
+        docs = _load_pdf_pypdf(file_path)
+
+        # If pages are empty, fall back to unstructured
+        if _is_empty(docs):
+            logger.warning(
+                f"PyPDFLoader returned empty pages for {os.path.basename(file_path)}, "
+                f"falling back to unstructured"
+            )
+            docs = _load_pdf_unstructured(file_path)
+
     elif ext == ".docx":
         from langchain_community.document_loaders import Docx2txtLoader
         loader = Docx2txtLoader(file_path)

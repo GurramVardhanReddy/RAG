@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-base-en-v1.5"
     embedding_dimension: int = 768
 
+    # --- Sparse Embedding (NEW — hybrid search) ---
+    sparse_model: str = "prithivida/Splade_PP_en_v1"
+
     # --- Chunking ---
     chunk_size: int = 500
     chunk_overlap: int = 50
@@ -30,6 +33,11 @@ class Settings(BaseSettings):
     # --- Retrieval ---
     top_k: int = 5
     reranker_model: str = "BAAI/bge-reranker-base"
+
+    # --- Hybrid Search (NEW) ---
+    use_hybrid: bool = True
+    use_reranker: bool = True
+    prefetch_limit: int = 20  # Candidates per retriever before RRF fusion
 
     # --- File Upload ---
     max_upload_size_mb: int = 50
