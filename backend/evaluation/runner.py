@@ -27,6 +27,8 @@ from backend.app.core.config import get_settings
 from backend.rag.embedding.embedder import get_embedding_model
 from backend.rag.generation.generator import generate_answer, build_context
 from backend.rag.explainability.engine import ExplainabilityEngine
+from backend.rag.retrieval.retriever import HybridRetriever
+from backend.rag.retrieval.sparse_encoder import encode_sparse
 
 from backend.evaluation.metrics import (
     exact_match,
@@ -58,15 +60,16 @@ class EvaluationRunner:
         collection_name: str = "eval_benchmark",
         output_dir: str = "./evaluation_results",
         use_llm_judge: bool = True,
+        retrieval_mode: str = "dense",  # dense | hybrid | hyde_dense | hyde_hybrid
     ):
         settings = get_settings()
         self.api_key = api_key or settings.openai_api_key
         self.output_dir = output_dir
         self.use_llm_judge = use_llm_judge
+        self.retrieval_mode = retrieval_mode
         os.makedirs(output_dir, exist_ok=True)
 
-        # Initialize pipeline components (reusing YOUR existing code)
-        logger.info("Initializing evaluation pipeline...")
+        logger.info(f"Initializing evaluation pipeline (mode: {retrieval_mode})...")
         self.embedding_model = get_embedding_model(settings.embedding_model)
 
         self.vector_store = VectorStoreService(
@@ -77,8 +80,25 @@ class EvaluationRunner:
         )
         self.vector_store.connect()
 
+        use_hybrid = retrieval_mode in ("hybrid", "hyde_hybrid")
+        use_hyde   = retrieval_mode in ("hyde_dense", "hyde_hybrid")
+
+        self.retriever = HybridRetriever(
+            vector_store=self.vector_store,
+            embedding_model=self.embedding_model,
+            use_hybrid=use_hybrid,
+            use_reranker=False,
+            use_hyde=use_hyde,
+            dense_prefetch=settings.dense_prefetch,
+            sparse_prefetch=settings.sparse_prefetch,
+            openai_api_key=self.api_key,
+        )
+        if use_hybrid:
+            logger.info(f"Loading sparse encoder: {settings.sparse_model}")
+            self.retriever.init_sparse_encoder()
+
         self.explainability_engine = ExplainabilityEngine()
-        logger.info("Evaluation pipeline ready")
+        logger.info(f"Evaluation pipeline ready (mode: {retrieval_mode})")
 
     # ============================================================
     # CORPUS INDEXING
@@ -102,17 +122,27 @@ class EvaluationRunner:
         docs = []
         for i, text in enumerate(texts):
             meta = metadatas[i] if metadatas else {}
-            meta.setdefault("page", i // 10)  # Approximate page grouping
+            meta.setdefault("page", i // 10)
             meta.setdefault("source", f"passage_{i}")
             docs.append(Document(page_content=text, metadata=meta))
 
-        # Embed
-        logger.info(f"Embedding {len(texts)} passages...")
-        vectors = self.embedding_model.embed_documents(texts)
+        # Dense embeddings
+        logger.info(f"Embedding {len(texts)} passages (dense)...")
+        dense_vectors = self.embedding_model.embed_documents(texts)
 
-        # Store
-        self.vector_store.add_documents(docs, vectors, document_id)
-        logger.info(f"Indexed {len(texts)} passages as '{document_id}'")
+        # Sparse embeddings (SPLADE)
+        logger.info(f"Embedding {len(texts)} passages (sparse)...")
+        from backend.app.core.config import get_settings
+        sparse_vectors = encode_sparse(texts, model_name=get_settings().sparse_model)
+
+        # Store with both vector types
+        self.vector_store.add_documents(
+            chunks=docs,
+            dense_vectors=dense_vectors,
+            sparse_vectors=sparse_vectors,
+            document_id=document_id,
+        )
+        logger.info(f"Indexed {len(texts)} passages as '{document_id}' (dense + sparse)")
 
     def index_uploaded_document(self, file_path: str, document_id: str = "eval_doc"):
         """
@@ -135,12 +165,19 @@ class EvaluationRunner:
         # Chunk
         chunks = semantic_chunk(docs, embedding_model=self.embedding_model)
         chunk_texts = [c.page_content for c in chunks]
-        vectors = self.embedding_model.embed_documents(chunk_texts)
+
+        # Dense + sparse embeddings
+        dense_vectors = self.embedding_model.embed_documents(chunk_texts)
+        from backend.app.core.config import get_settings
+        sparse_vectors = encode_sparse(chunk_texts, model_name=get_settings().sparse_model)
 
         # Store
         self.vector_store.ensure_collection()
         self.vector_store.add_documents(
-            chunks, vectors, document_id,
+            chunks=chunks,
+            dense_vectors=dense_vectors,
+            sparse_vectors=sparse_vectors,
+            document_id=document_id,
             page_paragraphs=page_paragraphs,
         )
         logger.info(f"Indexed {len(chunks)} chunks from {file_path}")
@@ -187,15 +224,13 @@ class EvaluationRunner:
             elif q_dataset == "custom":
                 prompt_mode = "general"
 
-        # 1. Embed query
-        query_vector = self.embedding_model.embed_query(question)
-
-        # 2. Retrieve
-        search_results = self.vector_store.search(
-            query_vector=query_vector,
+        # Retrieve via HybridRetriever (respects retrieval_mode setting)
+        retrieval_output = self.retriever.retrieve(
+            query=question,
             top_k=top_k,
             document_id=document_id,
         )
+        search_results = retrieval_output["results"]
 
         retrieved_texts = [r["text"] for r in search_results]
         scores = [r["score"] for r in search_results]

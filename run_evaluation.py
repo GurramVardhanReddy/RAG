@@ -131,47 +131,88 @@ def main():
     parser.add_argument("--questions-file", type=str, default=None, help="Path to pre-generated questions JSON")
     parser.add_argument("--no-judge", action="store_true", help="Skip LLM-as-judge evaluation (faster, cheaper)")
     parser.add_argument("--output-dir", type=str, default="./evaluation_results", help="Directory to save results")
+    parser.add_argument(
+        "--mode",
+        choices=["dense", "hybrid", "hyde_dense", "hyde_hybrid", "compare"],
+        default="dense",
+        help="Retrieval mode. 'compare' runs all 4 modes and outputs a comparison table.",
+    )
 
     args = parser.parse_args()
+
+    modes = ["dense", "hybrid", "hyde_dense", "hyde_hybrid"] if args.mode == "compare" else [args.mode]
 
     logger.info("="*60)
     logger.info("  Explainable RAG — Pipeline Evaluation (v2)")
     logger.info(f"  Experiment: {args.experiment}")
+    logger.info(f"  Mode(s): {', '.join(modes)}")
     logger.info(f"  Questions per dataset: {args.n}")
     logger.info(f"  LLM-as-judge: {'OFF' if args.no_judge else 'ON'}")
     logger.info(f"  Output: {args.output_dir}")
     logger.info("="*60)
 
     start_total = time.time()
-    runner = EvaluationRunner(output_dir=args.output_dir, use_llm_judge=not args.no_judge, collection_name="eval_default")
-    all_results = {}
+    comparison_results = {}
 
-    if args.experiment in ("benchmarks", "both"):
-        logger.info("\n>>> EXPERIMENT 1: Self-Contained Benchmarks")
-        logger.info(">>> (HotpotQA distractor, SQuAD 2.0, BoolQ)\n")
-        benchmark_results = run_standard_benchmarks(runner, n=args.n)
-        all_results.update(benchmark_results)
+    for mode in modes:
+        logger.info(f"\n{'#'*60}")
+        logger.info(f"  RETRIEVAL MODE: {mode.upper()}")
+        logger.info(f"{'#'*60}")
 
-    if args.experiment in ("custom", "both"):
-        corpus_path = args.corpus
-        if not corpus_path:
-            for p in ["data/uploads/Suppliment_document.pdf", "../Suppliment_document.pdf"]:
-                if os.path.exists(p):
-                    corpus_path = p
-                    break
-        if corpus_path and os.path.exists(corpus_path):
-            logger.info(f"\n>>> EXPERIMENT 2: Custom Corpus ({corpus_path})")
-            custom_results = run_custom_corpus_evaluation(runner=runner, corpus_path=corpus_path, n_per_type=args.n, questions_file=args.questions_file)
-            all_results.update(custom_results)
-        else:
-            logger.warning("No corpus file found for Experiment 2. Use --corpus path/to/document.pdf")
+        runner = EvaluationRunner(
+            output_dir=os.path.join(args.output_dir, mode),
+            use_llm_judge=not args.no_judge,
+            collection_name="eval_default",
+            retrieval_mode=mode,
+        )
+        all_results = {}
 
-    if all_results:
-        print_final_summary(all_results)
-        combined_path = os.path.join(args.output_dir, f"all_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
-        with open(combined_path, "w") as f:
-            json.dump({name: r.get("aggregated_metrics", {}) for name, r in all_results.items()}, f, indent=2, default=str)
-        logger.info(f"\nCombined results saved to {combined_path}")
+        if args.experiment in ("benchmarks", "both"):
+            logger.info("\n>>> EXPERIMENT 1: Self-Contained Benchmarks")
+            logger.info(">>> (HotpotQA distractor, SQuAD 2.0, BoolQ)\n")
+            benchmark_results = run_standard_benchmarks(runner, n=args.n)
+            all_results.update(benchmark_results)
+
+        if args.experiment in ("custom", "both"):
+            corpus_path = args.corpus
+            if not corpus_path:
+                for p in ["data/uploads/Suppliment_document.pdf", "../Suppliment_document.pdf"]:
+                    if os.path.exists(p):
+                        corpus_path = p
+                        break
+            if corpus_path and os.path.exists(corpus_path):
+                logger.info(f"\n>>> EXPERIMENT 2: Custom Corpus ({corpus_path})")
+                custom_results = run_custom_corpus_evaluation(runner=runner, corpus_path=corpus_path, n_per_type=args.n, questions_file=args.questions_file)
+                all_results.update(custom_results)
+            else:
+                logger.warning("No corpus file found for Experiment 2. Use --corpus path/to/document.pdf")
+
+        if all_results:
+            print_final_summary(all_results)
+
+        comparison_results[mode] = all_results
+
+    # --- Comparison table across modes ---
+    if len(modes) > 1 and comparison_results:
+        logger.info("\n" + "="*80)
+        logger.info("  MODE COMPARISON")
+        logger.info("="*80)
+        logger.info(f"{'Mode':<16} {'Dataset':<22} {'Hit Rate':>9} {'MRR':>9} {'F1':>9} {'Faith.':>9}")
+        logger.info("-"*80)
+        for mode, results in comparison_results.items():
+            for dataset, result in results.items():
+                agg = result.get("aggregated_metrics", {})
+                hr   = agg.get("hit_rate", {}).get("mean", 0)
+                mrr  = agg.get("mrr", {}).get("mean", 0)
+                f1   = agg.get("f1", {}).get("mean", 0)
+                faith = agg.get("faithfulness", {}).get("mean", 0)
+                logger.info(f"{mode:<16} {dataset:<22} {hr:>9.4f} {mrr:>9.4f} {f1:>9.4f} {faith:>9.4f}")
+        logger.info("="*80)
+
+        comparison_path = os.path.join(args.output_dir, f"mode_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+        with open(comparison_path, "w") as f:
+            json.dump({m: {ds: r.get("aggregated_metrics", {}) for ds, r in res.items()} for m, res in comparison_results.items()}, f, indent=2, default=str)
+        logger.info(f"Comparison saved to {comparison_path}")
 
     elapsed = time.time() - start_total
     logger.info(f"\nTotal evaluation time: {elapsed / 60:.1f} minutes")
