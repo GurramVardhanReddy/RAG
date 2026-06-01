@@ -50,7 +50,8 @@ class HybridRetriever:
         reranker_model_name: str = "BAAI/bge-reranker-base",
         use_hybrid: bool = True,
         use_reranker: bool = True,
-        prefetch_limit: int = 20,
+        dense_prefetch: int = 40,
+        sparse_prefetch: int = 10,
     ):
         self.vector_store = vector_store
         self.embedding_model = embedding_model
@@ -58,7 +59,8 @@ class HybridRetriever:
         self.reranker_model_name = reranker_model_name
         self.use_hybrid = use_hybrid
         self.use_reranker = use_reranker
-        self.prefetch_limit = prefetch_limit
+        self.dense_prefetch = dense_prefetch
+        self.sparse_prefetch = sparse_prefetch
 
         # Lazy-loaded components
         self._sparse_encoder = None
@@ -177,13 +179,12 @@ class HybridRetriever:
             timings["sparse_encode_ms"] = (time.time() - t0) * 1000
 
             t0 = time.time()
-            # Fetch more candidates for reranking
-            fetch_k = self.prefetch_limit if self.use_reranker else top_k
             search_results = self.vector_store.hybrid_search(
                 dense_vector=dense_vector,
                 sparse_vector=sparse_vector,
-                top_k=fetch_k,
-                prefetch_limit=self.prefetch_limit,
+                top_k=top_k if not self.use_reranker else self.dense_prefetch,
+                dense_prefetch=self.dense_prefetch,
+                sparse_prefetch=self.sparse_prefetch,
                 document_id=document_id,
             )
             timings["hybrid_search_ms"] = (time.time() - t0) * 1000
@@ -219,7 +220,7 @@ class HybridRetriever:
             "results": search_results,
             "metadata": {
                 "retrieval_method": retrieval_method,
-                "total_candidates": self.prefetch_limit,
+                "total_candidates": self.dense_prefetch + self.sparse_prefetch,
                 "final_count": len(search_results),
                 "processing_time_ms": round(elapsed_ms, 2),
                 "timings": {k: round(v, 2) for k, v in timings.items()},

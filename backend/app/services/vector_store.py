@@ -289,21 +289,23 @@ class VectorStoreService:
         dense_vector: list[float],
         sparse_vector,
         top_k: int = 5,
-        prefetch_limit: int = 20,
+        dense_prefetch: int = 40,
+        sparse_prefetch: int = 10,
         document_id: str = None,
     ) -> list[dict]:
         """
         Hybrid search using Qdrant's native RRF (Reciprocal Rank Fusion).
 
-        Runs dense and sparse searches in parallel via prefetch,
-        then fuses results server-side using RRF.
+        Dense gets more candidates than sparse (40 vs 10 by default) so it
+        dominates the RRF candidate pool — effectively weighting dense ~4x
+        higher. Tune dense_prefetch/sparse_prefetch in config to adjust.
 
         Args:
             dense_vector: BGE dense embedding (768d)
             sparse_vector: SparseEmbedding from fastembed (.indices, .values)
             top_k: Number of final results after fusion
-            prefetch_limit: Number of candidates from each retriever
-                           before fusion (higher = better recall, slower)
+            dense_prefetch: Candidates from dense retriever (higher = more weight)
+            sparse_prefetch: Candidates from sparse retriever (lower = less weight)
             document_id: Optional filter to search within one document
 
         Returns:
@@ -331,20 +333,20 @@ class VectorStoreService:
             values=sparse_vector.values.tolist(),
         )
 
-        # Prefetch from both retrievers, then fuse with RRF
+        # Prefetch from both retrievers with asymmetric limits, then fuse with RRF
         results = self.client.query_points(
             collection_name=self.collection_name,
             prefetch=[
                 Prefetch(
                     query=dense_vector,
                     using="dense",
-                    limit=prefetch_limit,
+                    limit=dense_prefetch,
                     filter=search_filter,
                 ),
                 Prefetch(
                     query=qdrant_sparse,
                     using="sparse",
-                    limit=prefetch_limit,
+                    limit=sparse_prefetch,
                     filter=search_filter,
                 ),
             ],

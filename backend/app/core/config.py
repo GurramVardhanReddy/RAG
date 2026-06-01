@@ -37,7 +37,8 @@ class Settings(BaseSettings):
     # --- Hybrid Search (NEW) ---
     use_hybrid: bool = True
     use_reranker: bool = True
-    prefetch_limit: int = 20  # Candidates per retriever before RRF fusion
+    dense_prefetch: int = 40   # Dense candidates — higher = more weight to dense
+    sparse_prefetch: int = 10  # Sparse candidates — lower = less weight to sparse
 
     # --- File Upload ---
     max_upload_size_mb: int = 50

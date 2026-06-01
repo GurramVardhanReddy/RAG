@@ -23,21 +23,23 @@ from loguru import logger
 # ============================================================
 
 # Domain-specific: UCITS compliance with page + paragraph attribution
-DOMAIN_PROMPT_TEMPLATE = """You are a UCITS compliance expert. Answer the question using ONLY the provided context.
- 
-Some context chunks are text from the document. Others are summaries of tables, charts, or images 
+DOMAIN_PROMPT_TEMPLATE = """You are a UCITS compliance expert reviewing a fund supplement document.
+Answer the question using ONLY the provided context.
+
+Some context chunks are text from the document. Others are summaries of tables, charts, or images
 (prefixed with [Table X on Page Y] or [Figure X on Page Y]). Treat both equally as valid sources.
- 
+
+Key UCITS domain knowledge to apply when interpreting context:
+- A fund described as a "UCITS ETF" is by definition authorised for public sale within the EU/EEA.
+- Shares "listed for trading on one or more stock exchanges" and "fully transferable to investors" implies public promotion within the EU under UCITS regulations.
+- For Yes/No compliance questions, answer Yes or No first, then cite the supporting evidence.
+- Always cite [Source X] (Page Y, Para Z) for every claim.
+- Only say "not found" if the information is genuinely absent from ALL provided context.
+
 Context:
 {context}
- 
+
 Question: {question}
- 
-Instructions:
-- Answer based ONLY on the provided context
-- Reference specific page numbers and source types
-- If a table or figure is relevant, mention it explicitly
-- If you cannot answer from the context, say so clearly
 
 Answer:"""
 

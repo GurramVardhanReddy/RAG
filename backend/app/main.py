@@ -72,7 +72,8 @@ def create_app() -> FastAPI:
             reranker_model_name=settings.reranker_model,
             use_hybrid=settings.use_hybrid,
             use_reranker=settings.use_reranker,
-            prefetch_limit=settings.prefetch_limit,
+            dense_prefetch=settings.dense_prefetch,
+            sparse_prefetch=settings.sparse_prefetch,
         )
 
         # 4. Load sparse encoder (SPLADE)
