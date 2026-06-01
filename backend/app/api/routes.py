@@ -70,6 +70,7 @@ class ExplainabilityInfo(BaseModel):
     total_chunks_searched: int
     processing_time_ms: float
     retrieval_timings: Optional[dict] = None
+    hyde_hypothesis: Optional[str] = None
 
 
 class MetricsInfo(BaseModel):
@@ -325,6 +326,7 @@ async def query_document(request: Request, body: QueryRequest):
             total_chunks_searched=total_chunks,
             processing_time_ms=round(end_to_end_ms, 2),
             retrieval_timings=retrieval_metadata.get("timings", {}),
+            hyde_hypothesis=retrieval_metadata.get("hypothesis"),
         ),
         metrics=MetricsInfo(
             query_to_vector_ms=round((metrics_record.query_to_vector_time) * 1000, 2),

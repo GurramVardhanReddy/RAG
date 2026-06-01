@@ -34,11 +34,14 @@ class Settings(BaseSettings):
     top_k: int = 5
     reranker_model: str = "BAAI/bge-reranker-base"
 
-    # --- Hybrid Search (NEW) ---
+    # --- Hybrid Search ---
     use_hybrid: bool = True
     use_reranker: bool = True
-    dense_prefetch: int = 40   # Dense candidates — higher = more weight to dense
-    sparse_prefetch: int = 10  # Sparse candidates — lower = less weight to sparse
+    dense_prefetch: int = 40
+    sparse_prefetch: int = 10
+
+    # --- HyDE ---
+    use_hyde: bool = False
 
     # --- File Upload ---
     max_upload_size_mb: int = 50

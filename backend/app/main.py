@@ -72,8 +72,10 @@ def create_app() -> FastAPI:
             reranker_model_name=settings.reranker_model,
             use_hybrid=settings.use_hybrid,
             use_reranker=settings.use_reranker,
+            use_hyde=settings.use_hyde,
             dense_prefetch=settings.dense_prefetch,
             sparse_prefetch=settings.sparse_prefetch,
+            openai_api_key=settings.openai_api_key,
         )
 
         # 4. Load sparse encoder (SPLADE)
@@ -102,9 +104,13 @@ def create_app() -> FastAPI:
             "embedding_model": settings.embedding_model,
             "sparse_model": settings.sparse_model if settings.use_hybrid else "disabled",
             "reranker_model": settings.reranker_model if settings.use_reranker else "disabled",
-            "retrieval_mode": "hybrid_rrf_reranked" if (settings.use_hybrid and settings.use_reranker)
-                             else "hybrid_rrf" if settings.use_hybrid
-                             else "dense_only",
+            "retrieval_mode": (
+                "hyde_hybrid_rrf" if (settings.use_hyde and settings.use_hybrid) else
+                "hyde_dense" if settings.use_hyde else
+                "hybrid_rrf_reranked" if (settings.use_hybrid and settings.use_reranker) else
+                "hybrid_rrf" if settings.use_hybrid else
+                "dense_only"
+            ),
             "vector_db": vs_info,
         }
 

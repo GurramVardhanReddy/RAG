@@ -50,8 +50,10 @@ class HybridRetriever:
         reranker_model_name: str = "BAAI/bge-reranker-base",
         use_hybrid: bool = True,
         use_reranker: bool = True,
+        use_hyde: bool = False,
         dense_prefetch: int = 40,
         sparse_prefetch: int = 10,
+        openai_api_key: str = "",
     ):
         self.vector_store = vector_store
         self.embedding_model = embedding_model
@@ -59,8 +61,10 @@ class HybridRetriever:
         self.reranker_model_name = reranker_model_name
         self.use_hybrid = use_hybrid
         self.use_reranker = use_reranker
+        self.use_hyde = use_hyde
         self.dense_prefetch = dense_prefetch
         self.sparse_prefetch = sparse_prefetch
+        self.openai_api_key = openai_api_key
 
         # Lazy-loaded components
         self._sparse_encoder = None
@@ -165,17 +169,28 @@ class HybridRetriever:
         start_time = time.time()
         retrieval_method = "dense"
         timings = {}
+        hypothesis = None
 
-        # --- Stage 1: Encode query ---
+        # --- Stage 0: HyDE — generate hypothesis and embed it instead of raw query ---
+        search_text = query
+        if self.use_hyde and self.openai_api_key:
+            from backend.rag.retrieval.hyde import generate_hypothesis
+            t0 = time.time()
+            hypothesis = generate_hypothesis(query, api_key=self.openai_api_key)
+            search_text = hypothesis
+            timings["hyde_ms"] = (time.time() - t0) * 1000
+            retrieval_method = "hyde_dense"
+
+        # --- Stage 1: Encode search text (query or hypothesis) ---
         t0 = time.time()
-        dense_vector = self.embedding_model.embed_query(query)
+        dense_vector = self.embedding_model.embed_query(search_text)
         timings["dense_encode_ms"] = (time.time() - t0) * 1000
 
         # --- Stage 2: Search ---
         if self.use_hybrid and self._sparse_encoder is not None:
             # Hybrid: Dense + Sparse → RRF
             t0 = time.time()
-            sparse_vector = self._encode_sparse_query(query)
+            sparse_vector = self._encode_sparse_query(search_text)
             timings["sparse_encode_ms"] = (time.time() - t0) * 1000
 
             t0 = time.time()
@@ -188,13 +203,13 @@ class HybridRetriever:
                 document_id=document_id,
             )
             timings["hybrid_search_ms"] = (time.time() - t0) * 1000
-            retrieval_method = "hybrid_rrf"
+            retrieval_method = "hyde_hybrid_rrf" if self.use_hyde else "hybrid_rrf"
         else:
             # Fallback: Dense-only
             t0 = time.time()
             search_results = self.vector_store.search(
                 query_vector=dense_vector,
-                top_k=top_k if not self.use_reranker else self.prefetch_limit,
+                top_k=top_k if not self.use_reranker else self.dense_prefetch,
                 document_id=document_id,
             )
             timings["dense_search_ms"] = (time.time() - t0) * 1000
@@ -226,6 +241,8 @@ class HybridRetriever:
                 "timings": {k: round(v, 2) for k, v in timings.items()},
                 "use_hybrid": self.use_hybrid,
                 "use_reranker": self.use_reranker,
+                "use_hyde": self.use_hyde,
+                "hypothesis": hypothesis,
                 "sparse_model": self.sparse_model_name if self.use_hybrid else None,
                 "reranker_model": self.reranker_model_name if self.use_reranker else None,
             },
