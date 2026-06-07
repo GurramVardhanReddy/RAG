@@ -1,0 +1,471 @@
+EXPLAINABLE RAG — PROJECT SUMMARY
+===================================
+
+
+WHAT IT DOES
+------------
+Upload a PDF document (e.g., a UCITS fund supplement), ask questions about it,
+and get answers that cite exactly which page and paragraph the answer came from.
+
+
+-------------------------------------------------------------------
+WHAT WE BUILT — STEP BY STEP
+-------------------------------------------------------------------
+
+STEP 1 — Got the base code running
+  - Fixed a broken OpenAI API key (had "sk-sk-proj-" instead of "sk-proj-")
+  - Installed missing packages (psutil, fastembed, datasets)
+  - Created the .env file with the correct API key
+  - Started Docker and Qdrant (the vector database)
+  - Started the FastAPI server on http://127.0.0.1:8000
+  - Tested it works via the Swagger UI at /docs
+
+
+STEP 2 — Pushed original code to GitHub (private repo)
+  - Created a private GitHub repository
+  - Pushed the clean baseline to the "main" branch
+  - This saved the original working version before experimenting
+
+
+STEP 3 — Built Hybrid Search (branch: feature/hybrid-search)
+  - Added SPLADE sparse encoding alongside the existing dense (BGE) embeddings
+  - Updated Qdrant collection to store two vector types: "dense" and "sparse"
+  - Added Qdrant's native RRF (Reciprocal Rank Fusion) to combine both searches
+  - Added a cross-encoder reranker (BGE-reranker-base) as a second-stage filter
+  - Added multimodal support: tables and images extracted from PDFs,
+    summarised by GPT-4o, and stored as additional searchable chunks
+  - Updated the LLM prompt to include UCITS domain knowledge
+    (e.g., "a UCITS ETF is by definition authorised for EU public sale")
+
+
+STEP 4 — Diagnosed retrieval problems
+  - Found that SPLADE was hurting recall on this document type:
+    The query "promote sale to EU public" has no keyword overlap with
+    the answer "shares fully transferable, listed on stock exchanges"
+    SPLADE matched the MSCI disclaimer ("NOT PROMOTED BY MSCI") instead
+  - Found the cross-encoder reranker was also pushing wrong chunks to the top
+  - Confirmed dense-only retrieval found the correct chunk (rank 4)
+  - Fixed by: disabling the reranker, using asymmetric prefetch
+    (40 dense candidates vs 10 sparse) to weight dense results higher
+
+
+STEP 5 — Built HyDE (branch: feature/hyde)
+  - HyDE = Hypothetical Document Embeddings (from Gao et al., ACL 2023)
+  - Instead of searching with the raw question, GPT-4o first generates
+    a short hypothetical answer passage, then that passage is embedded
+  - Example:
+      Query:      "Confirm the sub-fund promotes EU public sale"
+      Hypothesis: "The sub-fund is authorised to promote the sale of its
+                   units to the public within the EU under UCITS Directive..."
+  - The hypothesis contains the right domain keywords, so SPLADE now
+    matches the correct chunks instead of false positives
+  - Result: correct answer returned with confident "Yes" response
+  - Merged to main, then created new branch for evaluation
+
+
+STEP 6 — Built and ran Evaluation (branch: feature/hyde)
+  - Fixed the evaluation runner to work with the new vector store schema
+  - Added support for 4 retrieval modes: dense, hybrid, hyde_dense, hyde_hybrid
+  - Ran 50 questions each on 3 benchmarks:
+      HotpotQA  — multi-hop reasoning questions
+      SQuAD 2.0 — short-form factual questions on Wikipedia
+      BoolQ     — yes/no fact verification questions
+  - Added LLM-as-judge scoring (faithfulness, relevancy, correctness)
+  - Results saved as JSON and CSV in evaluation_results/
+
+
+-------------------------------------------------------------------
+HOW THE EVALUATION WORKS — IN DETAIL
+-------------------------------------------------------------------
+
+THE OVERALL FLOW
+  For every question in the benchmark dataset, the system:
+    1. Takes the question and its known correct answer (ground truth)
+    2. Retrieves the top 5 most relevant chunks from Qdrant
+    3. Sends those chunks + question to GPT-4o to generate an answer
+    4. Scores the answer using multiple metrics
+    5. Saves everything to a JSON and CSV file
+
+
+WHAT DATASETS WERE USED
+
+  HotpotQA (distractor setting)
+    - 50 multi-hop reasoning questions from Wikipedia
+    - Each question needs 2 supporting passages to answer correctly
+    - 8 distractor passages also provided to make retrieval harder
+    - Example: "Which magazine was started first, Time or Newsweek?"
+      requires finding the founding year of both magazines
+    - Tests: can the pipeline retrieve across multiple sources
+      and reason over them together?
+    - Source: Yang et al., EMNLP 2018
+
+  SQuAD 2.0 (Stanford Question Answering Dataset)
+    - 50 short-form factual questions from Wikipedia articles
+    - Also includes unanswerable questions (no answer in the passage)
+    - Ground truth is a short extracted span from the passage
+    - Example: "What year was the Eiffel Tower built?" → "1889"
+    - Tests: can the pipeline find and extract precise factual answers?
+    - Source: Rajpurkar et al., ACL 2018
+
+  BoolQ
+    - 50 yes/no questions, each paired with a Wikipedia passage
+    - Ground truth is simply "True" or "False"
+    - Example: "Is the Great Wall of China visible from space?" → "False"
+    - Tests: can the pipeline verify binary facts from context?
+    - Source: Clark et al., NAACL 2019
+
+  Each dataset is loaded, indexed into a temporary Qdrant collection,
+  evaluated, then the collection is deleted before the next dataset.
+
+
+WHAT METRICS WERE COMPUTED AND HOW
+
+  --- RETRIEVAL METRICS ---
+  These measure whether the pipeline found the right chunks.
+
+  Hit Rate (HR)
+    Question: Is the correct answer present in any of the 5 retrieved chunks?
+    How it works: The ground truth answer string is searched inside each chunk.
+                  If found in any chunk, HR = 1.0. If not found, HR = 0.0.
+    What it tells you: Whether the retrieval stage is working at all.
+    Our results:
+      dense:      HotpotQA 0.80, SQuAD 0.42, BoolQ 0.08
+      hybrid:     HotpotQA 0.76, SQuAD 0.42, BoolQ 0.08
+      hyde_dense: HotpotQA 0.72, SQuAD 0.42, BoolQ 0.08
+      hyde_hybrid:HotpotQA 0.66, SQuAD 0.42, BoolQ 0.08
+
+  MRR (Mean Reciprocal Rank)
+    Question: How high in the ranked list is the first correct chunk?
+    How it works: If the correct chunk is at rank 1, score = 1/1 = 1.0
+                  If at rank 2, score = 1/2 = 0.5
+                  If at rank 3, score = 1/3 = 0.33
+                  If not found at all, score = 0.0
+    What it tells you: Not just whether the right chunk was found,
+                       but how highly it was ranked.
+    Our results (HotpotQA):
+      dense 0.526, hybrid 0.498, hyde_dense 0.510, hyde_hybrid 0.462
+
+  Precision@K (K=5)
+    Question: Of the 5 chunks retrieved, how many are actually relevant?
+    How it works: Count relevant chunks in top 5, divide by 5.
+    What it tells you: How much noise is in the retrieved results.
+    Our results (HotpotQA):
+      dense 0.256, hybrid 0.260, hyde_dense 0.220, hyde_hybrid 0.216
+
+  --- GENERATION METRICS ---
+  These measure whether the generated answer is correct.
+
+  Exact Match (EM)
+    Question: Does the generated answer exactly match the ground truth?
+    How it works: Normalise both (lowercase, remove punctuation/articles),
+                  then check for equality.
+    Our results: 0.0 everywhere.
+    Why: Our system generates full explanation answers like
+         "Yes, the fund promotes EU sales because..."
+         The ground truth for SQuAD/HotpotQA is a short span like "1889".
+         These never match exactly. EM is designed for extractive QA,
+         not generative RAG. This is expected and not a problem.
+
+  Token F1
+    Question: How much token overlap is there between the answer and ground truth?
+    How it works: Treat answer and ground truth as bags of words.
+                  Precision = shared words / answer words
+                  Recall    = shared words / ground truth words
+                  F1        = 2 * precision * recall / (precision + recall)
+    Our results (HotpotQA): dense 0.103, hybrid 0.106
+    Why low: Same reason as EM. Generated answers are long;
+             ground truths are short. Long answers dilute precision.
+
+  ROUGE-L
+    Question: What is the longest matching word sequence between answer and ground truth?
+    How it works: Finds the Longest Common Subsequence (LCS) of words,
+                  then computes precision and recall based on LCS length.
+    Our results: Identical to F1 in our case (short ground truths).
+
+  Answer Contains
+    Question: Does the generated answer contain the ground truth string anywhere?
+    How it works: Check if the normalised ground truth appears as a substring
+                  of the normalised answer.
+    Softer than EM — the answer just needs to include the right answer somewhere.
+    Our results (HotpotQA): dense 0.78, hybrid 0.76, hyde_dense 0.68
+
+  --- LLM-AS-JUDGE METRICS ---
+  These use GPT-4o to score the answer quality — more reliable than
+  string matching for generative systems.
+
+  Faithfulness
+    Question: Is every claim in the answer supported by the retrieved chunks?
+    How GPT-4o scores it: It reads the retrieved context and the generated
+                           answer, then assigns 0.0-1.0 based on how well
+                           the answer stays grounded in the context.
+    1.0 = every statement in the answer comes from the context
+    0.0 = the answer contradicts or ignores the context (hallucination)
+    Our results (HotpotQA):
+      dense 0.812, hybrid 0.776, hyde_dense 0.660, hyde_hybrid 0.630
+
+  Relevancy
+    Question: Does the answer actually address the question asked?
+    How GPT-4o scores it: It checks whether the answer is on-topic
+                           and directly responds to the question.
+    1.0 = directly answers the question
+    0.0 = off-topic or evasive answer
+    Our results (HotpotQA):
+      dense 0.878, hybrid 0.880, hyde_dense 0.716, hyde_hybrid 0.746
+
+  Correctness
+    Question: Is the answer factually right compared to the ground truth?
+    How GPT-4o scores it: It compares the generated answer to the known
+                           correct answer and scores factual accuracy.
+    1.0 = fully correct
+    0.0 = wrong answer
+    Our results (HotpotQA):
+      dense 0.790, hybrid 0.790, hyde_dense 0.654, hyde_hybrid 0.600
+
+
+WHY BOOLQ SCORES ARE UNUSUAL
+  Hit Rate on BoolQ is 0.08 across all modes.
+  This looks like failure but it is not.
+  The ground truth for BoolQ is "True" or "False".
+  The word "True" or "False" does not appear in Wikipedia passages.
+  So hit_rate (which looks for the answer string in retrieved chunks) fails.
+  But LLM correctness is 0.79-0.86, meaning the system is actually
+  answering yes/no questions correctly — the text-matching metric
+  just cannot measure it. This is a known limitation of string-based
+  retrieval metrics for boolean QA.
+
+
+WHERE THE RESULTS ARE SAVED
+  evaluation_results/
+    dense/
+      benchmark_HotpotQA_distractor_TIMESTAMP.json   — full per-query results
+      benchmark_HotpotQA_distractor_TIMESTAMP.csv    — one row per question
+      benchmark_SQuAD_2.0_TIMESTAMP.json
+      benchmark_BoolQ_TIMESTAMP.json
+    hybrid/       — same structure
+    hyde_dense/   — same structure
+    hyde_hybrid/  — same structure
+    mode_comparison_TIMESTAMP.json   — all 4 modes side by side (final summary)
+
+  The CSV files can be opened in Excel to see per-question performance.
+  Each row shows: question, generated answer, ground truth,
+  hit_rate, mrr, f1, faithfulness, correctness, response time.
+
+
+-------------------------------------------------------------------
+KEY FINDINGS FROM EVALUATION
+-------------------------------------------------------------------
+
+  1. Dense-only is the best baseline (Hit Rate 0.80 on HotpotQA)
+     Simple BGE embeddings outperform all more complex modes on
+     general Wikipedia benchmarks.
+
+  2. Hybrid (SPLADE) hurts on semantic queries
+     When question vocabulary does not match answer vocabulary,
+     SPLADE creates false positives by matching keywords in wrong context.
+     Example: "promote" matched the MSCI disclaimer ("NOT PROMOTED BY MSCI")
+     instead of the correct chunk about share transferability.
+
+  3. HyDE helps on domain-specific queries but hurts on general benchmarks
+     On the UCITS document, HyDE bridged the vocabulary gap correctly.
+     On HotpotQA/SQuAD, the hypothesis generator was prompted for UCITS
+     financial language, which diverged from Wikipedia passage style,
+     reducing embedding similarity with the correct Wikipedia chunks.
+     Conclusion: HyDE is domain-sensitive and the hypothesis prompt
+     must match the domain of the corpus.
+
+  4. Cross-encoder reranker needs domain fine-tuning
+     The general-purpose reranker (trained on MS MARCO) downranked the
+     correct UCITS chunk because it didn't understand regulatory language.
+     On Wikipedia benchmarks it was also slower without meaningful gains.
+
+  5. EM = 0 everywhere — expected
+     Generative RAG produces explanation-style answers.
+     EM is designed for extractive QA. Use Answer Contains or LLM judge
+     for generative systems instead.
+
+  6. Faithfulness is high across all modes (0.77-0.97)
+     The LLM consistently stays grounded in the retrieved context.
+     This is the most important metric for a compliance use case.
+
+
+-------------------------------------------------------------------
+KEY TERMS EXPLAINED
+-------------------------------------------------------------------
+
+RAG
+  Retrieval-Augmented Generation. The LLM is given retrieved document
+  chunks as context before answering. Prevents hallucination.
+
+Dense Retrieval (BGE)
+  Converts text into a vector of 768 numbers capturing semantic meaning.
+  "Car" and "vehicle" are close even though they share no words.
+
+Sparse Retrieval (SPLADE)
+  Represents text using important vocabulary words as weights.
+  Good at exact keyword matching. "Promote" matches "sell", "market".
+
+Hybrid Search
+  Combines dense + sparse results. Dense catches meaning, sparse catches keywords.
+
+RRF (Reciprocal Rank Fusion)
+  Formula: 1/(60 + rank). Combines ranked lists from multiple retrievers
+  without needing to normalise their scores. A document ranked #1 in both
+  lists scores higher than one ranked #1 in only one.
+
+Asymmetric Prefetch
+  Dense gets 40 candidates, sparse gets 10. Since RRF is rank-based,
+  giving dense 4x more candidates means dense results dominate
+  the fused pool. Effectively weights dense ~4x higher than sparse.
+
+Cross-Encoder Reranker
+  Takes (question, passage) pairs and scores them together.
+  More accurate than separate embeddings but too slow for first-stage search.
+  Used to re-sort the top candidates after initial retrieval.
+
+HyDE (Hypothetical Document Embeddings)
+  Generate a fake answer passage first, then search with that embedding.
+  Bridges the vocabulary gap between question language and document language.
+  Reference: Gao et al., ACL 2023.
+
+Qdrant
+  The vector database. Stores all document chunks with their vectors.
+  Enables fast similarity search across thousands of chunks.
+  Runs inside Docker. Listens on port 6333.
+
+Semantic Chunking
+  Splits a document based on meaning, not fixed character counts.
+  Embeds each sentence, finds where semantic similarity drops,
+  splits there. Sentences about the same topic stay in the same chunk.
+
+Named Vectors
+  Qdrant feature: one point can store multiple vector types.
+  We store "dense" (768 floats) and "sparse" (variable indices+values)
+  together in the same Qdrant point for each chunk.
+
+Prefetch
+  Qdrant feature: run multiple sub-searches in parallel, collect
+  all their candidates, then apply a fusion step on the combined pool.
+
+Hit Rate
+  Is the correct answer present in any of the top-5 retrieved chunks?
+  1.0 = yes, 0.0 = no. Measures retrieval quality.
+
+MRR (Mean Reciprocal Rank)
+  1 / rank of the first correct chunk.
+  1.0 if rank 1, 0.5 if rank 2, 0.33 if rank 3.
+  Measures ranking quality not just recall.
+
+Precision@K
+  What fraction of the top-K chunks are actually relevant?
+  High precision means less noise in the retrieved results.
+
+Faithfulness
+  Is the generated answer supported by the retrieved context?
+  Scored by GPT-4o as a judge. 1.0 = fully grounded.
+  Most important metric for compliance use cases.
+
+Relevancy
+  Does the generated answer actually address the question?
+  Scored by GPT-4o as a judge. 1.0 = directly answers it.
+
+Correctness
+  Is the generated answer factually right vs ground truth?
+  Scored by GPT-4o. 1.0 = fully correct.
+
+Exact Match (EM)
+  Does the predicted answer exactly match the ground truth string?
+  Always 0 for generative RAG. Designed for extractive QA systems.
+
+Token F1
+  Word-level overlap between predicted and ground truth answer.
+  Low for generative systems because answers are longer than ground truth spans.
+
+ROUGE-L
+  Longest common subsequence overlap between predicted and ground truth.
+  Standard metric for summarisation and long-form generation.
+
+Answer Contains
+  Softer than EM. Does the generated answer contain the ground truth
+  string anywhere inside it? More appropriate for generative systems.
+
+LLM-as-Judge
+  Using GPT-4o to evaluate faithfulness, relevancy, and correctness
+  instead of string matching. More reliable for long generated answers.
+  Reference: Joshi et al., ICAAIC 2024.
+
+HotpotQA
+  Multi-hop QA benchmark. Questions require reasoning across 2 passages
+  out of 10 (8 are distractors). Tests complex retrieval and reasoning.
+
+SQuAD 2.0
+  Extractive QA benchmark on Wikipedia. Short span answers.
+  Includes unanswerable questions. Tests precise factual retrieval.
+
+BoolQ
+  Binary yes/no QA benchmark. Tests fact verification.
+  String-based retrieval metrics do not work well here.
+
+Ground Truth
+  The known correct answer for a question in a benchmark dataset.
+  Used to compare against the system's generated answer.
+
+GPT-4o
+  OpenAI's multimodal model used for:
+    - Answer generation (main query pipeline)
+    - Table and image summarisation (multimodal)
+    - HyDE hypothesis generation
+    - LLM-as-judge evaluation scoring
+
+
+-------------------------------------------------------------------
+HOW TO RUN
+-------------------------------------------------------------------
+
+Prerequisites:
+  - Docker Desktop open and running
+  - Python 3.11
+  - .env file with OPENAI_API_KEY=sk-...
+
+Start Qdrant:
+  docker start qdrant
+
+Start the server (in Git Bash):
+  python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+
+Use the API:
+  Open http://127.0.0.1:8000/docs in browser
+  POST /api/v1/upload  — upload a PDF
+  POST /api/v1/query   — ask a question
+
+Run evaluation:
+  python -m run_evaluation --experiment benchmarks --n 5 --no-judge --mode dense
+  python -m run_evaluation --experiment both --n 50 --mode compare --corpus "data/uploads/your.pdf"
+
+Current settings in .env:
+  USE_HYBRID=true      — use SPLADE alongside dense
+  USE_RERANKER=false   — cross-encoder reranking off
+  USE_HYDE=true        — generate hypothesis before searching
+  DENSE_PREFETCH=40    — how many candidates from dense search
+  SPARSE_PREFETCH=10   — how many candidates from sparse search
+
+
+-------------------------------------------------------------------
+BRANCHES ON GITHUB
+-------------------------------------------------------------------
+
+  main                  — clean stable version (v0.2.0, hybrid + HyDE + eval)
+  feature/hybrid-search — hybrid retrieval development (merged to main)
+  feature/hyde          — HyDE + evaluation work (latest)
+  evaluation-module     — earlier evaluation work
+
+
+-------------------------------------------------------------------
+RESEARCH PAPERS THIS IS BASED ON
+-------------------------------------------------------------------
+
+  Lewis et al. (NeurIPS 2020)      — RAG architecture
+  Gao et al. (ACL 2023)            — HyDE
+  Formal et al. (SIGIR 2021)       — SPLADE sparse encoding
+  Salemi & Zamani (SIGIR 2024)     — RAG evaluation metrics
+  Joshi et al. (ICAAIC 2024)       — Multi-type evaluation, LLM-as-judge
+  Barnett et al. (CAIN 2024)       — RAG failure points
