@@ -146,14 +146,24 @@ class VectorStoreService:
                 page_paragraphs.get(page_num, [])
             )
 
+            # Accept BGE-M3 dict {"indices": [...], "values": [...]}
+            # or legacy fastembed SparseEmbedding (.indices / .values arrays)
+            if isinstance(sparse_vec, dict):
+                qdrant_sparse = SparseVector(
+                    indices=sparse_vec["indices"],
+                    values=sparse_vec["values"],
+                )
+            else:
+                qdrant_sparse = SparseVector(
+                    indices=sparse_vec.indices.tolist(),
+                    values=sparse_vec.values.tolist(),
+                )
+
             point = PointStruct(
                 id=str(uuid.uuid4()),
                 vector={
                     "dense": dense_vec,
-                    "sparse": SparseVector(
-                        indices=sparse_vec.indices.tolist(),
-                        values=sparse_vec.values.tolist(),
-                    ),
+                    "sparse": qdrant_sparse,
                 },
                 payload={
                     "text": chunk.page_content,
@@ -327,11 +337,19 @@ class VectorStoreService:
                 ]
             )
 
-        # Convert fastembed SparseEmbedding to Qdrant SparseVector
-        qdrant_sparse = SparseVector(
-            indices=sparse_vector.indices.tolist(),
-            values=sparse_vector.values.tolist(),
-        )
+        # Accept Qdrant SparseVector, BGE-M3 dict, or legacy fastembed object
+        if isinstance(sparse_vector, SparseVector):
+            qdrant_sparse = sparse_vector
+        elif isinstance(sparse_vector, dict):
+            qdrant_sparse = SparseVector(
+                indices=sparse_vector["indices"],
+                values=sparse_vector["values"],
+            )
+        else:
+            qdrant_sparse = SparseVector(
+                indices=sparse_vector.indices.tolist(),
+                values=sparse_vector.values.tolist(),
+            )
 
         # Prefetch from both retrievers with asymmetric limits, then fuse with RRF
         results = self.client.query_points(

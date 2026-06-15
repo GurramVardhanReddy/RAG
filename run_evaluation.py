@@ -137,15 +137,23 @@ def main():
         default="dense",
         help="Retrieval mode. 'compare' runs all 4 modes and outputs a comparison table.",
     )
+    parser.add_argument(
+        "--reranker-type",
+        choices=["none", "cross_encoder", "colbert", "compare"],
+        default="none",
+        help="Reranker to use. 'compare' runs cross_encoder vs colbert vs none.",
+    )
 
     args = parser.parse_args()
 
     modes = ["dense", "hybrid", "hyde_dense", "hyde_hybrid"] if args.mode == "compare" else [args.mode]
+    reranker_types = ["none", "cross_encoder", "colbert"] if args.reranker_type == "compare" else [args.reranker_type]
 
     logger.info("="*60)
     logger.info("  Explainable RAG — Pipeline Evaluation (v2)")
     logger.info(f"  Experiment: {args.experiment}")
     logger.info(f"  Mode(s): {', '.join(modes)}")
+    logger.info(f"  Reranker(s): {', '.join(reranker_types)}")
     logger.info(f"  Questions per dataset: {args.n}")
     logger.info(f"  LLM-as-judge: {'OFF' if args.no_judge else 'ON'}")
     logger.info(f"  Output: {args.output_dir}")
@@ -155,15 +163,18 @@ def main():
     comparison_results = {}
 
     for mode in modes:
+      for reranker_type in reranker_types:
+        run_label = f"{mode}__{reranker_type}"
         logger.info(f"\n{'#'*60}")
-        logger.info(f"  RETRIEVAL MODE: {mode.upper()}")
+        logger.info(f"  MODE: {mode.upper()}  |  RERANKER: {reranker_type.upper()}")
         logger.info(f"{'#'*60}")
 
         runner = EvaluationRunner(
-            output_dir=os.path.join(args.output_dir, mode),
+            output_dir=os.path.join(args.output_dir, run_label),
             use_llm_judge=not args.no_judge,
             collection_name="eval_default",
             retrieval_mode=mode,
+            reranker_type=reranker_type,
         )
         all_results = {}
 
@@ -190,23 +201,23 @@ def main():
         if all_results:
             print_final_summary(all_results)
 
-        comparison_results[mode] = all_results
+        comparison_results[run_label] = all_results
 
     # --- Comparison table across modes ---
     if len(modes) > 1 and comparison_results:
         logger.info("\n" + "="*80)
         logger.info("  MODE COMPARISON")
         logger.info("="*80)
-        logger.info(f"{'Mode':<16} {'Dataset':<22} {'Hit Rate':>9} {'MRR':>9} {'F1':>9} {'Faith.':>9}")
-        logger.info("-"*80)
-        for mode, results in comparison_results.items():
+        logger.info(f"{'Run':<28} {'Dataset':<22} {'Hit Rate':>9} {'MRR':>9} {'F1':>9} {'Faith.':>9}")
+        logger.info("-"*90)
+        for run_label, results in comparison_results.items():
             for dataset, result in results.items():
                 agg = result.get("aggregated_metrics", {})
                 hr   = agg.get("hit_rate", {}).get("mean", 0)
                 mrr  = agg.get("mrr", {}).get("mean", 0)
                 f1   = agg.get("f1", {}).get("mean", 0)
                 faith = agg.get("faithfulness", {}).get("mean", 0)
-                logger.info(f"{mode:<16} {dataset:<22} {hr:>9.4f} {mrr:>9.4f} {f1:>9.4f} {faith:>9.4f}")
+                logger.info(f"{run_label:<28} {dataset:<22} {hr:>9.4f} {mrr:>9.4f} {f1:>9.4f} {faith:>9.4f}")
         logger.info("="*80)
 
         comparison_path = os.path.join(args.output_dir, f"mode_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")

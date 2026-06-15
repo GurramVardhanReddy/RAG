@@ -22,7 +22,6 @@ from backend.app.core.config import get_settings
 from backend.rag.chunking.chunker import recursive_chunk, semantic_chunk
 from backend.rag.generation.generator import generate_answer, build_context
 from backend.rag.explainability.engine import ExplainabilityEngine
-from backend.rag.retrieval.sparse_encoder import encode_sparse
 from backend.rag.metrics.tracker import RAGMetricsTracker, ResponseQualityMetrics, ResourceMetrics
 from backend.rag.multimodal.processor import extract_and_embed_visuals
 
@@ -159,8 +158,8 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
     dense_vectors = embedding_model.embed_documents(chunk_texts)
     logger.info(f"Generated {len(dense_vectors)} dense vectors")
 
-    # 6. Generate SPARSE embeddings (SPLADE)
-    sparse_vectors = encode_sparse(chunk_texts, model_name=settings.sparse_model)
+    # 6. Generate SPARSE embeddings (BGE-M3 lexical weights)
+    sparse_vectors = embedding_model.embed_documents_sparse(chunk_texts)
     logger.info(f"Generated {len(sparse_vectors)} sparse vectors")
 
     # 7. Store in Qdrant (both dense + sparse vectors with paragraph metadata)

@@ -68,8 +68,8 @@ def create_app() -> FastAPI:
         retriever = HybridRetriever(
             vector_store=vector_store,
             embedding_model=application.state.embedding_model,
-            sparse_model_name=settings.sparse_model,
             reranker_model_name=settings.reranker_model,
+            reranker_threshold=settings.reranker_threshold,
             use_hybrid=settings.use_hybrid,
             use_reranker=settings.use_reranker,
             use_hyde=settings.use_hyde,
@@ -78,21 +78,16 @@ def create_app() -> FastAPI:
             openai_api_key=settings.openai_api_key,
         )
 
-        # 4. Load sparse encoder (SPLADE)
-        if settings.use_hybrid:
-            logger.info(f"Loading sparse model: {settings.sparse_model}")
-            retriever.init_sparse_encoder()
-            logger.info("Sparse encoder (SPLADE) loaded!")
-
-        # 5. Load cross-encoder reranker
+        # 4. Load cross-encoder reranker
         if settings.use_reranker:
             logger.info(f"Loading reranker: {settings.reranker_model}")
             retriever.init_reranker()
-            logger.info("Cross-encoder reranker loaded!")
+            logger.info("Reranker loaded!")
 
         application.state.retriever = retriever
 
-        logger.info("Explainable RAG API ready! (Hybrid: Dense + Sparse → RRF → Rerank)")
+        reranker_label = f"{settings.reranker_type}:{settings.reranker_model}" if settings.use_reranker else "off"
+        logger.info(f"Explainable RAG API ready! (BGE-M3 dense+sparse → RRF → reranker:{reranker_label})")
 
     # --- Health check ---
     @application.get("/health")
@@ -102,7 +97,6 @@ def create_app() -> FastAPI:
             "status": "healthy",
             "version": "0.2.0",
             "embedding_model": settings.embedding_model,
-            "sparse_model": settings.sparse_model if settings.use_hybrid else "disabled",
             "reranker_model": settings.reranker_model if settings.use_reranker else "disabled",
             "retrieval_mode": (
                 "hyde_hybrid_rrf" if (settings.use_hyde and settings.use_hybrid) else

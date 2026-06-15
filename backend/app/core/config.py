@@ -19,12 +19,9 @@ class Settings(BaseSettings):
     debug: bool = True
     log_level: str = "info"
 
-    # --- Embedding ---
-    embedding_model: str = "BAAI/bge-base-en-v1.5"
-    embedding_dimension: int = 768
-
-    # --- Sparse Embedding (NEW — hybrid search) ---
-    sparse_model: str = "prithivida/Splade_PP_en_v1"
+    # --- Embedding (BGE-M3: unified dense + sparse) ---
+    embedding_model: str = "BAAI/bge-m3"
+    embedding_dimension: int = 1024
 
     # --- Chunking ---
     chunk_size: int = 500
@@ -32,7 +29,10 @@ class Settings(BaseSettings):
 
     # --- Retrieval ---
     top_k: int = 5
-    reranker_model: str = "BAAI/bge-reranker-base"
+    reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    reranker_threshold: float = 0.1
+    # NOTE: embedding_dimension changed 768→1024 with BGE-M3.
+    # Delete the existing Qdrant collection before first run.
 
     # --- Hybrid Search ---
     use_hybrid: bool = True

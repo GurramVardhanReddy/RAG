@@ -20,13 +20,14 @@ langchain-huggingface
 pypdf
 python-docx
 
-# === Dense Embeddings & Models ===
+# === Embeddings & Models ===
 sentence-transformers
 transformers
 torch>=2.0.0
+FlagEmbedding
 
-# === Sparse Embeddings (Hybrid Search) ===
-fastembed
+# === ColBERT Reranker ===
+ragatouille
 
 # === Vector Database ===
 qdrant-client>=1.7.0

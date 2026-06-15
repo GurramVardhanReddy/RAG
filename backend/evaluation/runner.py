@@ -28,7 +28,6 @@ from backend.rag.embedding.embedder import get_embedding_model
 from backend.rag.generation.generator import generate_answer, build_context
 from backend.rag.explainability.engine import ExplainabilityEngine
 from backend.rag.retrieval.retriever import HybridRetriever
-from backend.rag.retrieval.sparse_encoder import encode_sparse
 
 from backend.evaluation.metrics import (
     exact_match,
@@ -61,12 +60,14 @@ class EvaluationRunner:
         output_dir: str = "./evaluation_results",
         use_llm_judge: bool = True,
         retrieval_mode: str = "dense",  # dense | hybrid | hyde_dense | hyde_hybrid
+        reranker_type: str = "none",    # none | cross_encoder | colbert
     ):
         settings = get_settings()
         self.api_key = api_key or settings.openai_api_key
         self.output_dir = output_dir
         self.use_llm_judge = use_llm_judge
         self.retrieval_mode = retrieval_mode
+        self.reranker_type = reranker_type
         os.makedirs(output_dir, exist_ok=True)
 
         logger.info(f"Initializing evaluation pipeline (mode: {retrieval_mode})...")
@@ -86,16 +87,21 @@ class EvaluationRunner:
         self.retriever = HybridRetriever(
             vector_store=self.vector_store,
             embedding_model=self.embedding_model,
+            reranker_model_name=settings.reranker_model,
+            reranker_threshold=settings.reranker_threshold,
+            reranker_type=self.reranker_type,
             use_hybrid=use_hybrid,
-            use_reranker=False,
+            use_reranker=self.reranker_type != "none",
             use_hyde=use_hyde,
             dense_prefetch=settings.dense_prefetch,
             sparse_prefetch=settings.sparse_prefetch,
             openai_api_key=self.api_key,
         )
-        if use_hybrid:
-            logger.info(f"Loading sparse encoder: {settings.sparse_model}")
-            self.retriever.init_sparse_encoder()
+        if self.reranker_type not in ("none", "") and self.reranker_type is not None:
+            if self.reranker_type == "colbert":
+                self.retriever.init_colbert_reranker()
+            else:
+                self.retriever.init_reranker()
 
         self.explainability_engine = ExplainabilityEngine()
         logger.info(f"Evaluation pipeline ready (mode: {retrieval_mode})")
@@ -130,10 +136,9 @@ class EvaluationRunner:
         logger.info(f"Embedding {len(texts)} passages (dense)...")
         dense_vectors = self.embedding_model.embed_documents(texts)
 
-        # Sparse embeddings (SPLADE)
+        # Sparse embeddings (BGE-M3 lexical weights)
         logger.info(f"Embedding {len(texts)} passages (sparse)...")
-        from backend.app.core.config import get_settings
-        sparse_vectors = encode_sparse(texts, model_name=get_settings().sparse_model)
+        sparse_vectors = self.embedding_model.embed_documents_sparse(texts)
 
         # Store with both vector types
         self.vector_store.add_documents(
@@ -166,10 +171,9 @@ class EvaluationRunner:
         chunks = semantic_chunk(docs, embedding_model=self.embedding_model)
         chunk_texts = [c.page_content for c in chunks]
 
-        # Dense + sparse embeddings
+        # Dense + sparse embeddings (both from BGE-M3)
         dense_vectors = self.embedding_model.embed_documents(chunk_texts)
-        from backend.app.core.config import get_settings
-        sparse_vectors = encode_sparse(chunk_texts, model_name=get_settings().sparse_model)
+        sparse_vectors = self.embedding_model.embed_documents_sparse(chunk_texts)
 
         # Store
         self.vector_store.ensure_collection()

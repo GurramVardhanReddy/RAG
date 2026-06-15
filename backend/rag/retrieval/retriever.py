@@ -36,9 +36,6 @@ class HybridRetriever:
             vector_store=my_store,
             embedding_model=my_embedder,
         )
-        # Must be called once after documents are loaded
-        retriever.init_sparse_encoder()
-
         results = retriever.retrieve("What is the refund policy?", top_k=5)
     """
 
@@ -46,8 +43,8 @@ class HybridRetriever:
         self,
         vector_store,
         embedding_model,
-        sparse_model_name: str = "prithivida/Splade_PP_en_v1",
-        reranker_model_name: str = "BAAI/bge-reranker-base",
+        reranker_model_name: str = "BAAI/bge-reranker-v2-m3",
+        reranker_threshold: float = 0.1,
         use_hybrid: bool = True,
         use_reranker: bool = True,
         use_hyde: bool = False,
@@ -57,8 +54,8 @@ class HybridRetriever:
     ):
         self.vector_store = vector_store
         self.embedding_model = embedding_model
-        self.sparse_model_name = sparse_model_name
         self.reranker_model_name = reranker_model_name
+        self.reranker_threshold = reranker_threshold
         self.use_hybrid = use_hybrid
         self.use_reranker = use_reranker
         self.use_hyde = use_hyde
@@ -66,19 +63,7 @@ class HybridRetriever:
         self.sparse_prefetch = sparse_prefetch
         self.openai_api_key = openai_api_key
 
-        # Lazy-loaded components
-        self._sparse_encoder = None
         self._reranker = None
-
-    def init_sparse_encoder(self):
-        """
-        Initialize the sparse encoder (SPLADE via fastembed).
-        Called at app startup.
-        """
-        from backend.rag.retrieval.sparse_encoder import get_sparse_model
-
-        self._sparse_encoder = get_sparse_model(self.sparse_model_name)
-        logger.info(f"Sparse encoder ready: {self.sparse_model_name}")
 
     def init_reranker(self):
         """
@@ -95,10 +80,13 @@ class HybridRetriever:
         logger.info(f"Cross-encoder reranker ready: {self.reranker_model_name}")
 
     def _encode_sparse_query(self, query: str):
-        """Generate sparse query vector using SPLADE."""
-        from backend.rag.retrieval.sparse_encoder import encode_sparse_query
-
-        return encode_sparse_query(query, self.sparse_model_name)
+        """Generate sparse query vector using BGE-M3 lexical weights."""
+        from qdrant_client.models import SparseVector
+        sparse_dict = self.embedding_model.embed_query_sparse(query)
+        return SparseVector(
+            indices=sparse_dict["indices"],
+            values=sparse_dict["values"],
+        )
 
     def _rerank(
         self,
@@ -107,38 +95,34 @@ class HybridRetriever:
         top_k: int,
     ) -> list[dict]:
         """
-        Re-score results using the cross-encoder.
+        Re-score results using either the cross-encoder or ColBERT.
 
-        The cross-encoder jointly encodes (query, passage) pairs,
-        providing more accurate relevance scores than bi-encoder
-        cosine similarity. Results are re-sorted by cross-encoder score.
+        Cross-encoder: jointly encodes (query, passage) pairs and replaces
+        the RRF score only when the CE score is not significantly worse
+        (controlled by reranker_threshold). This prevents the reranker from
+        actively hurting retrieval when it is uncertain.
 
-        Args:
-            query: Original query text
-            results: List of result dicts from hybrid search
-            top_k: Number of final results to return
-
-        Returns:
-            Re-ranked and truncated results with updated scores
+        ColBERT: uses late token-level interaction via RAGatouille.
         """
         if not results:
             return results
 
-        # Build (query, passage) pairs for cross-encoder
         pairs = [(query, r["text"]) for r in results]
-
-        # Score all pairs
         ce_scores = self._reranker.predict(pairs)
 
-        # Attach cross-encoder scores and sort descending
         for result, ce_score in zip(results, ce_scores):
-            result["rrf_score"] = result["score"]  # Preserve RRF score
-            result["reranker_score"] = float(ce_score)
-            result["score"] = float(ce_score)  # Use CE score as primary
-            result["retrieval_method"] = "hybrid_rrf_reranked"
+            result["rrf_score"] = result["score"]
+            ce_score_f = float(ce_score)
+            result["reranker_score"] = ce_score_f
+            # Only promote the CE score if it isn't significantly below the RRF score.
+            # This stops the reranker actively hurting good retrievals.
+            if ce_score_f > (result["score"] - self.reranker_threshold):
+                result["score"] = ce_score_f
+                result["retrieval_method"] = "hybrid_rrf_reranked"
+            else:
+                result["retrieval_method"] = "hybrid_rrf_threshold_kept"
 
         results.sort(key=lambda r: r["score"], reverse=True)
-
         return results[:top_k]
 
     def retrieve(
@@ -187,7 +171,7 @@ class HybridRetriever:
         timings["dense_encode_ms"] = (time.time() - t0) * 1000
 
         # --- Stage 2: Search ---
-        if self.use_hybrid and self._sparse_encoder is not None:
+        if self.use_hybrid:
             # Hybrid: Dense + Sparse → RRF
             t0 = time.time()
             sparse_vector = self._encode_sparse_query(search_text)
@@ -243,7 +227,6 @@ class HybridRetriever:
                 "use_reranker": self.use_reranker,
                 "use_hyde": self.use_hyde,
                 "hypothesis": hypothesis,
-                "sparse_model": self.sparse_model_name if self.use_hybrid else None,
                 "reranker_model": self.reranker_model_name if self.use_reranker else None,
             },
         }
