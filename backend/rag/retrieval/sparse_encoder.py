@@ -56,6 +56,7 @@ def get_sparse_model(
 def encode_sparse(
     texts: list[str],
     model_name: str = "prithivida/Splade_PP_en_v1",
+    batch_size: int = 8,
 ) -> list[SparseEmbedding]:
     """
     Generate sparse vectors for a batch of texts.
@@ -63,6 +64,7 @@ def encode_sparse(
     Args:
         texts: List of text strings to encode
         model_name: Sparse model to use
+        batch_size: Number of texts to process at once (keep low on CPU/low RAM)
 
     Returns:
         List of SparseEmbedding objects, each with:
@@ -70,11 +72,16 @@ def encode_sparse(
             - .values: numpy array of corresponding weights
     """
     model = get_sparse_model(model_name)
-    # fastembed returns a generator, convert to list
-    embeddings = list(model.embed(texts))
-    logger.debug(f"Generated {len(embeddings)} sparse vectors")
-    return embeddings
-
+    
+    all_embeddings = []
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        batch_embeddings = list(model.embed(batch))
+        all_embeddings.extend(batch_embeddings)
+        logger.debug(f"Sparse encoded batch {i//batch_size + 1}/{(len(texts) + batch_size - 1)//batch_size}")
+    
+    logger.debug(f"Generated {len(all_embeddings)} sparse vectors")
+    return all_embeddings
 
 def encode_sparse_query(
     query: str,
