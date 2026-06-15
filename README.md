@@ -2,67 +2,105 @@
 
 ## Overview
 
-A production-ready **multimodal RAG** system with built-in explainability for financial document compliance. Users can upload PDF documents containing text, tables, charts, and images — ask questions — and receive answers with transparent source attribution, confidence scores, page/paragraph references, and retrieval explanations.
+A production-ready **multimodal RAG** system with built-in explainability and **domain-adaptive embedding selection**. Users upload PDF/DOCX documents — the system automatically identifies the document domain, selects the best pre-trained domain-specific embedding model, and provides full XAI attribution explaining why that model was chosen.
 
-The system automates answers to **Section 10 UCITS Application Form** questions using Supplement documents, while providing the provenance tracking required for regulatory transparency.
+**v0.3.0 New Feature: Domain-Adaptive Embedding Selection**
+The system now automatically routes documents to domain-specific embedding models (Finance, Legal, Medical, Scientific, Code, E-commerce, or General) and explains the selection using keyword attribution XAI.
+
+---
+
+## Domain → Embedding Model Routing
+
+| Domain | Embedding Model | Dimension |
+|---|---|---|
+| Finance / Regulatory | `nickmuchi/sec-bert-base` | 768d |
+| Legal | `nlpaueb/legal-bert-base-uncased` | 768d |
+| Medical / Biomedical | `dmis-lab/biobert-base-cased-v1.2` | 768d |
+| Scientific / Academic | `allenai/scibert_scivocab_uncased` | 768d |
+| Code / Software | `microsoft/codebert-base` | 768d |
+| E-commerce / Product | `sentence-transformers/multi-qa-mpnet-base-dot-v1` | 768d |
+| General (fallback) | `BAAI/bge-m3` | 1024d |
+
+**XAI Method:** Keyword TF-IDF attribution across 7 domain lexicons. For low-confidence cases, GPT-4o verification is used and its reasoning is stored. Every domain decision is fully auditable.
+
+---
 
 ## Architecture
 
 ```
-                          ┌─────────────────┐
-                          │  PDF/DOCX Upload │
-                          └────────┬────────┘
+                          ┌─────────────────────┐
+                          │   PDF/DOCX Upload    │
+                          └────────┬────────────┘
                                    │
-                          ┌────────▼────────┐
-                          │ Document Loader  │
-                          │ (PyPDF/fallback) │
-                          └────────┬────────┘
+                          ┌────────▼────────────┐
+                          │  Document Loader     │
+                          │  (PyPDF/fallback)    │
+                          └────────┬────────────┘
                                    │
-                    ┌──────────────┴──────────────┐
-                    │                             │
-           ┌────────▼────────┐          ┌─────────▼─────────┐
-           │ Semantic Chunker│          │ Multimodal Extractor│
-           │ + Paragraph     │          │ (unstructured)      │
-           │   Detection     │          │ Tables / Images     │
-           └────────┬────────┘          └─────────┬──────────┘
-                    │                             │
-           ┌────────▼────────┐          ┌─────────▼──────────┐
-           │ Dense + Sparse  │          │ GPT-4o Summarize   │
-           │ Embeddings      │          │ + Dense + Sparse   │
-           │ (BGE + SPLADE)  │          │   Embeddings       │
-           └────────┬────────┘          └─────────┬──────────┘
-                    │                             │
-                    └──────────────┬──────────────┘
-                                   │
-                          ┌────────▼────────┐
-                          │     Qdrant      │
-                          │  (Named Vectors)│
-                          └────────┬────────┘
-                                   │
-               ════════════════════╪═══════════════════════
-                            QUERY PIPELINE
-                                   │
-                          ┌────────▼────────┐
-                          │  User Question  │
-                          └────────┬────────┘
-                                   │
-                          ┌────────▼────────┐
-                          │ Hybrid Retrieval│
-                          │ Dense + Sparse  │
-                          │  → RRF → Rerank │
-                          └────────┬────────┘
-                                   │
-                          ┌────────▼────────┐
-                          │ GPT-4o Generate │
-                          └────────┬────────┘
-                                   │
-                          ┌────────▼────────┐
-                          │ Explainability  │
-                          │ Engine          │
-                          │ (confidence,    │
-                          │  page/para refs)│
-                          └─────────────────┘
+                    ┌──────────────┴──────────────────┐
+                    │                                 │
+           ┌────────▼────────┐             ┌──────────▼──────────┐
+           │ Domain Detector  │             │ Multimodal Extractor │
+           │  (NEW v0.3.0)    │             │ (unstructured)       │
+           │                  │             │ Tables / Images      │
+           │ Keyword TF-IDF   │             └──────────┬──────────┘
+           │ attribution XAI  │                        │
+           │ → domain label   │             ┌──────────▼──────────┐
+           │ → model name     │             │ GPT-4o Summarize    │
+           └────────┬────────┘             └──────────┬──────────┘
+                    │                                 │
+           ┌────────▼────────┐                        │
+           │ Domain-Specific  │                        │
+           │ Embedding Model  │◄───────────────────────┘
+           │ (7 models)       │
+           └────────┬────────┘
+                    │
+           ┌────────▼────────┐
+           │  SPLADE Sparse  │
+           │  Encoder        │
+           └────────┬────────┘
+                    │
+           ┌────────▼────────┐
+           │  Qdrant         │
+           │  (Per-Domain    │
+           │   Collections)  │
+           └────────┬────────┘
+                    │
+    ════════════════╪════════════════
+              QUERY PIPELINE
+                    │
+           ┌────────▼────────┐
+           │  User Question  │
+           └────────┬────────┘
+                    │
+           ┌────────▼────────┐
+           │ Domain lookup   │  ← same model used at index time
+           │ for document_id │
+           └────────┬────────┘
+                    │
+           ┌────────▼────────┐
+           │ Domain Model    │  ← embeds query in same vector space
+           │ Query Embed     │
+           └────────┬────────┘
+                    │
+           ┌────────▼────────┐
+           │ Hybrid Retrieval│
+           │ Dense + Sparse  │
+           │  → RRF → Rerank │
+           └────────┬────────┘
+                    │
+           ┌────────▼────────┐
+           │ GPT-4o Generate │
+           └────────┬────────┘
+                    │
+           ┌────────▼────────┐
+           │ Three-Layer     │
+           │ Explainability  │
+           │ Engine          │
+           └─────────────────┘
 ```
+
+---
 
 ## Project Structure
 
@@ -71,155 +109,188 @@ explainable-rag/
 │
 ├── backend/
 │   ├── app/
-│   │   ├── api/routes.py              # API endpoints (upload, query, metrics)
+│   │   ├── api/routes.py              # API endpoints (upload + domain XAI, query, health)
 │   │   ├── core/config.py             # Settings from .env
 │   │   ├── services/
 │   │   │   ├── document_loader.py     # PDF/DOCX loading with fallback
-│   │   │   └── vector_store.py        # Qdrant operations (named vectors)
-│   │   └── main.py                    # FastAPI entry point
+│   │   │   └── vector_store.py        # Qdrant (per-domain collections)  [UPDATED]
+│   │   └── main.py                    # FastAPI entry point               [UPDATED]
 │   │
 │   ├── rag/
 │   │   ├── chunking/
 │   │   │   └── chunker.py             # Semantic + recursive chunking
 │   │   ├── embedding/
-│   │   │   └── embedder.py            # BGE embedding model
+│   │   │   ├── domain_detector.py     # Domain classifier + XAI          [NEW]
+│   │   │   └── embedder.py            # Multi-model cache manager         [UPDATED]
 │   │   ├── retrieval/
-│   │   │   ├── retriever.py           # Hybrid retriever (Dense + Sparse → RRF → Rerank)
+│   │   │   ├── retriever.py           # Domain-aware HybridRetriever      [UPDATED]
 │   │   │   └── sparse_encoder.py      # SPLADE sparse encoding
 │   │   ├── generation/
-│   │   │   └── generator.py           # GPT-4o response generation
+│   │   │   └── generator.py           # GPT-4o answer generation
 │   │   ├── explainability/
-│   │   │   └── engine.py              # Confidence scoring + attribution
-│   │   ├── multimodal/                # NEW — Multimodal processing
-│   │   │   ├── __init__.py
-│   │   │   └── processor.py           # Extract tables/images, GPT-4o summaries
+│   │   │   └── engine.py              # Three-layer explainability
+│   │   ├── multimodal/
+│   │   │   └── processor.py           # Table/image extraction + GPT-4o
 │   │   └── metrics/
-│   │       └── tracker.py             # Pipeline metrics (5 categories)
+│   │       └── tracker.py             # Pipeline performance metrics
 │   │
-│   ├── evaluation/
-│   │   └── runner.py                  # Benchmark evaluation framework
-│   └── tests/
+│   └── evaluation/
+│       └── kilt_indexer.py            # KILT Wikipedia indexing script
 │
-├── frontend/                          # React web application (planned)
-├── docker/
+├── frontend/                          # React + Vite UI
+│   └── src/
+│       └── pages/
+│           ├── Upload.jsx             # Upload page (shows domain XAI)
+│           └── Query.jsx              # Query page + 7 explainability tabs
+│
 ├── data/
-│   ├── uploads/                       # Uploaded documents
-│   └── extracted_visuals/             # Extracted table/image files
-├── metrics_output/                    # Query metrics JSON/CSV exports
-├── docker-compose.yml
-├── .env
+│   ├── uploads/                       # Uploaded document files
+│   └── extracted_visuals/             # Extracted tables/images
+│
+├── metrics_output/                    # Per-query metrics JSON logs
+├── .env                               # Environment variables (API keys)
+├── requirements.txt
 └── README.md
 ```
 
-## Tech Stack
+---
 
-| Component         | Technology                               |
-| ----------------- | ---------------------------------------- |
-| Backend           | Python 3.12, FastAPI                     |
-| Dense Embeddings  | BAAI/bge-base-en-v1.5 (768d)             |
-| Sparse Embeddings | prithivida/Splade_PP_en_v1               |
-| Reranker          | BAAI/bge-reranker-base                   |
-| Vector Database   | Qdrant (named vectors: dense + sparse)   |
-| LLM               | OpenAI GPT-4o                            |
-| Multimodal        | unstructured (PDF layout), GPT-4o vision |
-| Frontend          | React (planned)                          |
-| Deployment        | Docker, AWS (planned)                    |
-
-## Key Features
-
-**Multimodal RAG** — Extracts tables, charts, and images from PDFs using `unstructured`'s hi-res layout analysis. Each visual element is summarized by GPT-4o into a brief, searchable description and embedded alongside text chunks. When a user asks about data in a table or trend in a chart, the system retrieves both text and visual summaries.
-
-**Hybrid Retrieval** — Combines dense semantic search (BGE embeddings) with sparse lexical search (SPLADE) using Reciprocal Rank Fusion, then reranks with a cross-encoder (BGE reranker). This addresses the known limitation that dense retrieval alone is insufficient for full recall (Wang et al., 2021).
-
-**Explainability** — Every answer includes page numbers, paragraph references, confidence scores, and retrieval method metadata. Provenance tracking directly addresses failure points FP2–FP4 of the seven RAG failure modes (Barnett et al., CAIN 2024).
-
-**Robust PDF Loading** — Primary extraction via PyPDFLoader with automatic fallback to `unstructured` when pages return empty (handles scanned PDFs and unusual encodings).
-
-**Comprehensive Metrics** — Five metric categories tracked per query: pipeline performance timing, retrieval quality, response quality, explainability quality, and resource efficiency. Exportable to JSON/CSV for analysis.
-
-## Getting Started
+## How to Run (Step-by-Step)
 
 ### Prerequisites
-
-- Python 3.11+
-- Docker Desktop (for Qdrant)
+- Python 3.12
+- Docker Desktop installed and running
 - OpenAI API key
-- Poppler (for PDF image extraction on Windows)
 
-### Setup
+### Step 1 — Start Docker Desktop
+Open Docker Desktop and wait for it to fully start (whale icon in taskbar).
 
-```bash
-# 1. Navigate to project
-cd explainable-rag
+### Step 2 — Start Qdrant (vector database)
+Open a terminal and run:
+```powershell
+docker-compose up -d qdrant
+```
+This starts Qdrant with a persistent named volume. Qdrant UI available at http://localhost:6333/dashboard.
 
-# 2. Create and activate virtual environment
-python -m venv venv
-venv\Scripts\activate          # Windows
-# source venv/bin/activate     # Mac/Linux
+> **IMPORTANT:** Always use `docker-compose up -d qdrant` and `docker-compose stop` (never `docker-compose down -v`) to preserve your indexed vectors.
 
-# 3. Install dependencies
-pip install fastapi uvicorn[standard] python-multipart python-dotenv loguru pydantic pydantic-settings
-pip install langchain langchain-community langchain-core langchain-text-splitters langchain-experimental langchain-openai langchain-huggingface
-pip install pypdf python-docx sentence-transformers rank-bm25
-pip install qdrant-client langchain-qdrant
-pip install "unstructured[pdf]"
-pip install pytest pytest-asyncio httpx
+### Step 3 — Activate virtual environment
+```powershell
+cd C:\Users\HP\Desktop\RAG
+venv\Scripts\activate
+```
 
-# 4. Copy env file and add your OpenAI key
-cp .env.example .env
-# Edit .env → set OPENAI_API_KEY=sk-your-key-here
-
-# 5. Start Qdrant (in a separate terminal)
-docker run -p 6333:6333 qdrant/qdrant
-
-# 6. Start the backend
+### Step 4 — Start the backend
+```powershell
 uvicorn backend.app.main:app --reload
 ```
 
-### Usage
+You should see:
+```
+Starting Explainable RAG API v0.3.0
+Domain-Adaptive Embedding Selection enabled
+SPLADE sparse encoder ready.
+Cross-encoder reranker ready.
+Explainable RAG API v0.3.0 ready!
+```
 
-1. Open **http://localhost:8000/docs** (Swagger UI)
-2. **Upload a document:** `POST /api/v1/upload` → upload your PDF
-3. **Ask a question:** `POST /api/v1/query` with:
-   ```json
-   {
-     "question": "Is the Fund an exchange-traded fund?",
-     "document_id": "abc12345",
-     "top_k": 5
-   }
-   ```
-4. **Response includes:** answer, source chunks with page/paragraph numbers, confidence score, retrieval timings, and full metrics breakdown
+### Step 5 — Start the frontend (separate terminal)
+```powershell
+cd frontend
+npm run dev
+```
+Frontend available at http://localhost:3000
 
-### API Endpoints
+---
 
-| Method | Endpoint                 | Description                                    |
-| ------ | ------------------------ | ---------------------------------------------- |
-| POST   | `/api/v1/upload`         | Upload and process a document (text + visuals) |
-| POST   | `/api/v1/query`          | Ask a question with full explainability        |
-| GET    | `/api/v1/documents`      | List all processed documents                   |
-| GET    | `/api/v1/metrics`        | View aggregated query metrics                  |
-| GET    | `/api/v1/metrics/export` | Export metrics to JSON/CSV                     |
-| GET    | `/health`                | Health check with vector DB status             |
+## What Happens on Upload
 
-### Dashboards
+1. Document text is extracted
+2. **Domain Detector** runs keyword TF-IDF attribution across 7 domain lexicons
+3. Domain is identified (e.g. "Finance/Regulatory" for UCITS documents)
+4. Correct embedding model is loaded (e.g. `nickmuchi/sec-bert-base`)
+5. Document is chunked and embedded with the domain model
+6. Chunks stored in a domain-specific Qdrant collection
+7. Upload response includes full **XAI attribution**:
+   - Detected domain + confidence score
+   - All 7 domain probability scores
+   - Top 15 keywords that triggered the decision (with importance scores + context snippets)
+   - Human-readable explanation sentence
+   - Whether GPT-4o verification was used and its reasoning
 
-- **Swagger UI:** http://localhost:8000/docs
-- **Qdrant Dashboard:** http://localhost:6333/dashboard
+## What Happens on Query
 
-## Research Context
+1. `document_id` is used to look up the document's domain + embedding model
+2. Query is embedded with the **same model** used at index time (vector space consistency)
+3. Hybrid search runs in the correct domain-specific Qdrant collection
+4. RRF fusion + cross-encoder reranking
+5. GPT-4o generates the answer
+6. Three-layer explainability analysis runs
+7. Query response includes `retrieval_timings.domain` and `retrieval_timings.query_embedding_model`
 
-This system is part of an MSc Data Analytics practicum project at Dublin City University, supervised by Dr. Irina Tal. It sits at the intersection of applied NLP, explainability research, and financial compliance.
+---
 
-### Key Literature
+## XAI Methods in the System
 
-- Lewis et al. — Original RAG framework
-- Barnett et al. (CAIN 2024) — Seven failure points in RAG systems
-- Joshi et al. (ICAAIC 2024) — Robust multimodal RAG for documents with text, tables, and images
-- Wang et al. — BM25 interpolation for dense retrieval
-- Khattab & Zaharia — ColBERT late interaction
-- Adadi & Berrada — XAI survey (Peeking Inside the Black-Box)
-- Salemi & Zamani (SIGIR 2024) — Evaluating retrieval quality in RAG
+| Location | XAI Method | What it explains |
+|---|---|---|
+| **Upload** | Keyword TF-IDF Attribution | Why a domain was detected + why a model was selected |
+| **Upload (low confidence)** | GPT-4o reasoning | Natural language justification when keywords are ambiguous |
+| **Query — Layer 1** | Source Attribution Precision/Recall | How accurately sources are cited |
+| **Query — Layer 1** | Confidence Calibration | How trustworthy the confidence score is |
+| **Query — Layer 2** | Chunk Relevance Heatmap | Which retrieved chunks are most relevant |
+| **Query — Layer 2** | Provenance Trace | Full audit trail: query → chunks → answer |
+| **Query — LIME** | Retrieval LIME | Which query words drove retrieval (word-level importance) |
 
-## Author
+---
 
-**Jaswanth** — MSc Data Analytics, Dublin City University (Student ID: A00052520)
+## API Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/upload` | Upload document (returns domain XAI) |
+| `POST` | `/api/v1/query` | Query a document |
+| `GET` | `/api/v1/documents` | List uploaded documents with domain info |
+| `GET` | `/api/v1/health/collections` | Status of all domain Qdrant collections |
+| `GET` | `/health` | API health + cached models list |
+| `GET` | `/docs` | Swagger UI |
+
+---
+
+## Environment Variables (.env)
+
+```env
+OPENAI_API_KEY=sk-...
+
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
+QDRANT_COLLECTION_NAME=explainable_rag
+
+SPARSE_MODEL=prithivida/Splade_PP_en_v1
+RERANKER_MODEL=BAAI/bge-reranker-base
+
+USE_HYBRID=true
+USE_RERANKER=true
+PREFETCH_LIMIT=20
+
+CHUNK_SIZE=500
+CHUNK_OVERLAP=50
+TOP_K=5
+```
+
+---
+
+## Notes on First Upload per Domain
+
+The first time a new domain is encountered (e.g. first Legal document uploaded):
+- The domain model downloads from HuggingFace (~400MB for most models)
+- This only happens once — the model is cached in memory for all subsequent uploads
+- Subsequent uploads for the same domain are fast (model already loaded)
+
+If your internet is slow, pre-download models by running:
+```python
+from backend.rag.embedding.embedder import get_embedding_model
+get_embedding_model("nickmuchi/sec-bert-base")       # Finance
+get_embedding_model("nlpaueb/legal-bert-base-uncased")  # Legal
+# etc.
+```
