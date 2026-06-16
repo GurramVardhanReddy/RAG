@@ -86,7 +86,7 @@ def create_app() -> FastAPI:
 
         application.state.retriever = retriever
 
-        reranker_label = f"{settings.reranker_type}:{settings.reranker_model}" if settings.use_reranker else "off"
+        reranker_label = settings.reranker_model if settings.use_reranker else "off"
         logger.info(f"Explainable RAG API ready! (BGE-M3 dense+sparse → RRF → reranker:{reranker_label})")
 
     # --- Health check ---
