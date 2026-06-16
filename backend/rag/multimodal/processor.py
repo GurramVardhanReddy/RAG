@@ -256,6 +256,8 @@ def extract_and_embed_visuals(
     vector_store,
     sparse_encoder=None,
     output_dir: str = "data/extracted_visuals",
+    domain: str = "General",
+    embedding_model_name: str = "BAAI/bge-base-en-v1.5",
 ) -> dict:
     """
     End-to-end helper: extract visuals → summarize → embed → store.
@@ -343,22 +345,16 @@ def extract_and_embed_visuals(
         points.append(point)
 
     # Upload to Qdrant
-    vector_store.client.upsert(
-        collection_name=vector_store.collection_name,
-        points=points,
+    # Upload via domain-aware method (same collection as text chunks)
+    vector_store.add_visual_documents(
+        visual_docs=visual_docs,
+        dense_vectors=dense_vectors,
+        sparse_vectors=sparse_vectors if sparse_vectors else [],
+        document_id=document_id,
+        domain=domain,
+        embedding_model_name=embedding_model_name,
     )
-
-    # Count by type
     n_tables = sum(1 for d in visual_docs if d.metadata.get("content_type") == "table")
     n_images = sum(1 for d in visual_docs if d.metadata.get("content_type") == "image")
-
-    logger.info(
-        f"Multimodal indexing complete: {n_tables} tables + {n_images} images "
-        f"= {len(points)} visual chunks added to Qdrant"
-    )
-
-    return {
-        "tables": n_tables,
-        "images": n_images,
-        "chunks_added": len(points),
-    }
+    logger.info(f"Multimodal indexing complete: {n_tables} tables + {n_images} images = {len(visual_docs)} chunks (domain={domain})")
+    return {"tables": n_tables, "images": n_images, "chunks_added": len(visual_docs)}
