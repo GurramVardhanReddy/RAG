@@ -311,14 +311,15 @@ class VectorStoreService:
             )
 
         try:
-            results = self.client.search(
+            results = self.client.query_points(
                 collection_name=collection,
-                query_vector=("dense", query_vector),
+                query=query_vector,
+                using="dense",
                 limit=top_k,
                 query_filter=doc_filter,
                 with_payload=True,
             )
-            return self._format_results(results)
+            return self._format_results(results.points)
         except Exception as e:
             logger.error(f"Dense search failed in '{collection}': {e}")
             return []
