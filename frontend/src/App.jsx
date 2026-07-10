@@ -2,6 +2,8 @@ import { useState, useRef, useCallback } from 'react'
 
 const API = '/api/v1'
 
+
+
 // ═══════════════════════════════════════════════
 // HELPER FUNCTIONS
 // ═══════════════════════════════════════════════
@@ -17,6 +19,262 @@ function metricQuality(val) {
 }
 function pct(val) { return `${(val * 100).toFixed(1)}%` }
 function fmt(val, dp = 4) { return typeof val === 'number' ? val.toFixed(dp) : val }
+
+
+// ═══════════════════════════════════════════════════════════════
+// DomainXAIPanel — Drop this component into your App.jsx
+// Shows domain detection result + XAI keyword attribution
+// after a successful document upload.
+//
+// USAGE in App.jsx, inside the {result && (...)} block,
+// add <DomainXAIPanel xai={result.domain_detection} />
+// ═══════════════════════════════════════════════════════════════
+
+const DOMAIN_ICONS = {
+  'Finance/Regulatory':  '💰',
+  'Legal':               '⚖️',
+  'Medical/Biomedical':  '🧬',
+  'Scientific/Academic': '🔬',
+  'Code/Software':       '💻',
+  'E-commerce/Product':  '🛒',
+  'General':             '📄',
+}
+
+const DOMAIN_COLORS = {
+  'Finance/Regulatory':  { bg: '#f0fdf4', border: '#86efac', accent: '#16a34a', badge: '#dcfce7', badgeText: '#15803d' },
+  'Legal':               { bg: '#faf5ff', border: '#d8b4fe', accent: '#7c3aed', badge: '#ede9fe', badgeText: '#6d28d9' },
+  'Medical/Biomedical':  { bg: '#fff1f2', border: '#fda4af', accent: '#e11d48', badge: '#ffe4e6', badgeText: '#be123c' },
+  'Scientific/Academic': { bg: '#eff6ff', border: '#93c5fd', accent: '#2563eb', badge: '#dbeafe', badgeText: '#1d4ed8' },
+  'Code/Software':       { bg: '#f8fafc', border: '#94a3b8', accent: '#475569', badge: '#f1f5f9', badgeText: '#334155' },
+  'E-commerce/Product':  { bg: '#fff7ed', border: '#fdba74', accent: '#ea580c', badge: '#ffedd5', badgeText: '#c2410c' },
+  'General':             { bg: '#f9fafb', border: '#d1d5db', accent: '#6b7280', badge: '#f3f4f6', badgeText: '#374151' },
+}
+
+function ConfidenceRing({ value }) {
+  const pct = Math.round(value * 100)
+  const radius = 28
+  const circumference = 2 * Math.PI * radius
+  const strokeDash = (value * circumference).toFixed(1)
+  const color = value >= 0.8 ? '#16a34a' : value >= 0.5 ? '#d97706' : '#dc2626'
+
+  return (
+    <div style={{ position: 'relative', width: 72, height: 72, flexShrink: 0 }}>
+      <svg width="72" height="72" viewBox="0 0 72 72" style={{ transform: 'rotate(-90deg)' }}>
+        <circle cx="36" cy="36" r={radius} fill="none" stroke="var(--surface-alt, #f1f5f9)" strokeWidth="6" />
+        <circle
+          cx="36" cy="36" r={radius} fill="none"
+          stroke={color} strokeWidth="6"
+          strokeDasharray={`${strokeDash} ${circumference}`}
+          strokeLinecap="round"
+          style={{ transition: 'stroke-dasharray 1s ease' }}
+        />
+      </svg>
+      <div style={{
+        position: 'absolute', inset: 0,
+        display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center',
+      }}>
+        <span style={{ fontSize: '1rem', fontWeight: 700, color, lineHeight: 1 }}>{pct}%</span>
+      </div>
+    </div>
+  )
+}
+
+function DomainProbabilityBar({ domain, probability, isSelected }) {
+  const colors = DOMAIN_COLORS[domain] || DOMAIN_COLORS['General']
+  const pct = (probability * 100).toFixed(1)
+  return (
+    <div style={{ marginBottom: '0.45rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.2rem' }}>
+        <span style={{
+          fontSize: '0.78rem',
+          fontWeight: isSelected ? 700 : 400,
+          color: isSelected ? colors.accent : 'var(--text-secondary, #64748b)',
+          display: 'flex', alignItems: 'center', gap: '0.3rem'
+        }}>
+          {DOMAIN_ICONS[domain]} {domain}
+          {isSelected && <span style={{ fontSize: '0.7rem', background: colors.badge, color: colors.badgeText, padding: '1px 6px', borderRadius: 8, fontWeight: 600 }}>Selected</span>}
+        </span>
+        <span style={{ fontSize: '0.78rem', fontWeight: isSelected ? 700 : 400, color: isSelected ? colors.accent : 'var(--text-tertiary, #94a3b8)' }}>{pct}%</span>
+      </div>
+      <div style={{ height: 6, background: 'var(--surface-alt, #f1f5f9)', borderRadius: 4, overflow: 'hidden' }}>
+        <div style={{
+          height: '100%',
+          width: `${Math.min(probability * 100, 100)}%`,
+          background: isSelected ? colors.accent : '#cbd5e1',
+          borderRadius: 4,
+          transition: 'width 0.8s ease',
+        }} />
+      </div>
+    </div>
+  )
+}
+
+function KeywordChip({ kw, maxScore }) {
+  const normalized = maxScore > 0 ? kw.importance_score / maxScore : 0
+  const alpha = Math.max(0.15, normalized)
+  return (
+    <div
+      title={kw.context_snippet || ''}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+        padding: '3px 10px', borderRadius: 20,
+        background: `rgba(37, 99, 235, ${alpha * 0.15})`,
+        border: `1px solid rgba(37, 99, 235, ${alpha * 0.4})`,
+        fontSize: '0.78rem', fontWeight: 600,
+        color: `rgba(30, 64, 175, ${0.5 + alpha * 0.5})`,
+        cursor: 'default',
+        transition: 'transform 0.15s',
+      }}
+      onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.05)'}
+      onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
+    >
+      <span>{kw.word}</span>
+      <span style={{ opacity: 0.65, fontSize: '0.7rem' }}>×{kw.frequency}</span>
+    </div>
+  )
+}
+
+export function DomainXAIPanel({ xai }) {
+  if (!xai) return null
+
+  const colors = DOMAIN_COLORS[xai.detected_domain] || DOMAIN_COLORS['General']
+  const icon = DOMAIN_ICONS[xai.detected_domain] || '📄'
+  const topKeywords = (xai.top_keywords || []).slice(0, 12)
+  const maxScore = topKeywords.length > 0 ? Math.max(...topKeywords.map(k => k.importance_score)) : 1
+
+  // Sort domain probabilities descending
+  const sortedDomains = Object.entries(xai.domain_probabilities || {})
+    .sort(([, a], [, b]) => b - a)
+
+  return (
+    <div style={{
+      marginTop: '1.5rem',
+      border: `1.5px solid ${colors.border}`,
+      borderRadius: 12,
+      overflow: 'hidden',
+      background: '#fff',
+    }}>
+      {/* Header */}
+      <div style={{
+        padding: '0.9rem 1.25rem',
+        background: colors.bg,
+        borderBottom: `1px solid ${colors.border}`,
+        display: 'flex', alignItems: 'center', gap: '0.75rem',
+      }}>
+        <span style={{ fontSize: '1.4rem' }}>{icon}</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 700, fontSize: '0.95rem', color: colors.accent }}>
+            Domain detected: {xai.detected_domain}
+          </div>
+          <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary, #64748b)', marginTop: 2 }}>
+            XAI method: {xai.xai_method?.replace(/_/g, ' ')} · {xai.gpt_used ? 'GPT-4o verified' : 'Keyword attribution only'}
+          </div>
+        </div>
+        <ConfidenceRing value={xai.confidence} />
+      </div>
+
+      <div style={{ padding: '1.1rem 1.25rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
+
+        {/* Left: Embedding model + XAI explanation */}
+        <div>
+          {/* Model selection box */}
+          <div style={{
+            padding: '0.75rem 1rem',
+            background: colors.bg,
+            border: `1px solid ${colors.border}`,
+            borderRadius: 8,
+            marginBottom: '1rem',
+          }}>
+            <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-tertiary, #94a3b8)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.3rem' }}>
+              Embedding model selected
+            </div>
+            <div style={{ fontFamily: 'monospace', fontSize: '0.8rem', fontWeight: 700, color: colors.accent, wordBreak: 'break-all' }}>
+              {xai.embedding_model}
+            </div>
+            <div style={{ fontSize: '0.73rem', color: 'var(--text-tertiary, #94a3b8)', marginTop: 4 }}>
+              {xai.embedding_dimension}d vectors · cosine similarity
+            </div>
+          </div>
+
+          {/* XAI explanation */}
+          <div style={{
+            padding: '0.75rem 1rem',
+            background: 'var(--surface, #f8fafc)',
+            border: '1px solid var(--border, #e2e8f0)',
+            borderRadius: 8,
+            fontSize: '0.8rem',
+            color: 'var(--text-secondary, #64748b)',
+            lineHeight: 1.6,
+          }}>
+            <div style={{ fontWeight: 600, fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary, #94a3b8)', marginBottom: '0.4rem' }}>
+              Why this domain?
+            </div>
+            {xai.xai_explanation}
+          </div>
+
+          {/* GPT-4o reasoning (if used) */}
+          {xai.gpt_used && xai.gpt_reasoning && (
+            <div style={{
+              marginTop: '0.75rem',
+              padding: '0.75rem 1rem',
+              background: '#fefce8',
+              border: '1px solid #fde047',
+              borderRadius: 8,
+              fontSize: '0.8rem',
+              color: '#713f12',
+              lineHeight: 1.6,
+            }}>
+              <div style={{ fontWeight: 700, marginBottom: '0.3rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <span>🤖</span> GPT-4o verification reasoning
+              </div>
+              {xai.gpt_reasoning}
+            </div>
+          )}
+        </div>
+
+        {/* Right: Domain probability bars */}
+        <div>
+          <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-tertiary, #94a3b8)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.75rem' }}>
+            All domain scores
+          </div>
+          {sortedDomains.map(([domain, prob]) => (
+            <DomainProbabilityBar
+              key={domain}
+              domain={domain}
+              probability={prob}
+              isSelected={domain === xai.detected_domain}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Keyword attribution section */}
+      {topKeywords.length > 0 && (
+        <div style={{
+          padding: '0.9rem 1.25rem',
+          borderTop: '1px solid var(--border, #e2e8f0)',
+          background: 'var(--surface, #f8fafc)',
+        }}>
+          <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-tertiary, #94a3b8)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.6rem' }}>
+            🔑 Top triggering keywords — hover for context
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+            {topKeywords.map((kw, i) => (
+              <KeywordChip key={i} kw={kw} maxScore={maxScore} />
+            ))}
+          </div>
+          <div style={{ marginTop: '0.65rem', fontSize: '0.73rem', color: 'var(--text-tertiary, #94a3b8)' }}>
+            Opacity and border intensity reflect keyword importance score (TF × IDF weighting). ×N = frequency in document.
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+
 
 // ═══════════════════════════════════════════════
 // UPLOAD PAGE
@@ -97,7 +355,9 @@ function UploadPage({ documents, setDocuments }) {
             <div className="upload-stat"><div className="value">{result.visual_images || 0}</div><div className="label">Images</div></div>
             <div className="upload-stat"><div className="value">{result.processing_time_ms?.toFixed(0)}ms</div><div className="label">Processing time</div></div>
           </div>
+          <DomainXAIPanel xai={result.domain_detection} />
         </div>
+        
       )}
 
       {documents.length > 0 && (
