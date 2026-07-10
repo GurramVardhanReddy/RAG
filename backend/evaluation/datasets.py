@@ -33,12 +33,15 @@ from loguru import logger
 # 1. HotpotQA (distractor) — Multi-hop QA
 # ============================================================
 
-def load_hotpotqa_distractor(n: int = 200, split: str = "validation") -> dict:
+def load_hotpotqa_distractor(n: int = 200, split: str = "validation", offset: int = 0) -> dict:
     """
     Load HotpotQA distractor setting.
     Each question comes with 10 paragraphs (2 gold + 8 distractors).
     Tests multi-hop reasoning and retrieval across multiple passages.
-    
+
+    Args:
+        offset: Skip this many questions before starting (for batched runs).
+
     Reference: Yang et al., "HotpotQA" (EMNLP 2018)
     """
     from datasets import load_dataset
@@ -61,7 +64,11 @@ def load_hotpotqa_distractor(n: int = 200, split: str = "validation") -> dict:
     questions = []
     corpus = []
     corpus_seen = set()
+    skipped = 0
     for ex in ds:
+        if skipped < offset:
+            skipped += 1
+            continue
         if len(questions) >= n:
             break
         gold_titles = set(ex["supporting_facts"]["title"])
@@ -90,20 +97,27 @@ def load_hotpotqa_distractor(n: int = 200, split: str = "validation") -> dict:
 # 2. SQuAD 2.0 — Reading Comprehension + Unanswerable
 # ============================================================
 
-def load_squad(n: int = 200, split: str = "validation") -> dict:
+def load_squad(n: int = 200, split: str = "validation", offset: int = 0) -> dict:
     """
     Load SQuAD 2.0 — each question comes with its Wikipedia paragraph.
     Includes unanswerable questions (ground_truth = ["unanswerable"]).
-    
+
+    Args:
+        offset: Skip this many questions before starting (for batched runs).
+
     Reference: Rajpurkar et al., "SQuAD 2.0" (ACL 2018)
     """
     from datasets import load_dataset
-    logger.info(f"Loading SQuAD 2.0 ({split}, n={n})...")
+    logger.info(f"Loading SQuAD 2.0 ({split}, n={n}, offset={offset})...")
     ds = load_dataset("rajpurkar/squad_v2", split=split, streaming=True)
     questions = []
     corpus = []
     corpus_seen = set()
+    skipped = 0
     for ex in ds:
+        if skipped < offset:
+            skipped += 1
+            continue
         if len(questions) >= n:
             break
         ctx_key = ex["context"][:100]
@@ -135,20 +149,27 @@ def load_squad(n: int = 200, split: str = "validation") -> dict:
 # 3. BoolQ — Yes/No Fact Verification
 # ============================================================
 
-def load_boolq(n: int = 200, split: str = "validation") -> dict:
+def load_boolq(n: int = 200, split: str = "validation", offset: int = 0) -> dict:
     """
     Load BoolQ — yes/no questions with passage context.
     Tests binary reasoning / fact verification ability.
-    
+
+    Args:
+        offset: Skip this many questions before starting (for batched runs).
+
     Reference: Clark et al., "BoolQ" (NAACL 2019)
     """
     from datasets import load_dataset
-    logger.info(f"Loading BoolQ ({split}, n={n})...")
+    logger.info(f"Loading BoolQ ({split}, n={n}, offset={offset})...")
     ds = load_dataset("google/boolq", split=split, streaming=True)
     questions = []
     corpus = []
     corpus_seen = set()
+    skipped = 0
     for ex in ds:
+        if skipped < offset:
+            skipped += 1
+            continue
         if len(questions) >= n:
             break
         passage = ex["passage"]
@@ -170,7 +191,7 @@ def load_boolq(n: int = 200, split: str = "validation") -> dict:
 # 4. FEVER (standalone) — Fact Verification with Evidence
 # ============================================================
 
-def load_fever(n: int = 200, split: str = "labelled_dev") -> dict:
+def load_fever(n: int = 200, split: str = "labelled_dev", offset: int = 0) -> dict:
     """
     Load FEVER — claim verification with evidence sentences.
     Each claim is labelled SUPPORTS, REFUTES, or NOT ENOUGH INFO.
@@ -178,6 +199,9 @@ def load_fever(n: int = 200, split: str = "labelled_dev") -> dict:
 
     Self-contained: uses the evidence provided with each claim,
     no need to index the full FEVER Wikipedia dump.
+
+    Args:
+        offset: Skip this many claims before starting (for batched runs).
 
     Reference: Thorne et al., "FEVER" (NAACL 2018)
     HuggingFace: fever/fever (paper_dev / paper_test / labelled_dev)
@@ -222,6 +246,7 @@ def load_fever(n: int = 200, split: str = "labelled_dev") -> dict:
     questions = []
     corpus = []
     corpus_seen = set()
+    valid_seen = 0  # counts only SUPPORTS/REFUTES claims (what offset is against)
 
     for ex in dataset:
         if len(questions) >= n:
@@ -241,40 +266,56 @@ def load_fever(n: int = 200, split: str = "labelled_dev") -> dict:
         if not claim or not label:
             continue
 
-        # Extract evidence text if available
+        # Skip NOT ENOUGH INFO — no real evidence to retrieve from
+        if label == "NOT ENOUGH INFO":
+            continue
+
+        # Apply offset against valid (non-NEI) questions
+        if valid_seen < offset:
+            valid_seen += 1
+            continue
+        valid_seen += 1
+
+        # Extract evidence text
+        # copenlu/fever_gold_evidence schema: evidence = [["Wikipedia_Title", "sentence"], ...]
+        # fever/fever schema: evidence_sentence field or evidence_wiki_url + sentence
         evidence_text = ""
-        if "evidence_sentence" in ex:
+
+        raw_evidence = ex.get("evidence", None)
+
+        if raw_evidence and isinstance(raw_evidence, list):
+            # copenlu format: list of ["Wikipedia_Title", "sentence_index", "sentence_text"]
+            sentences = []
+            for item in raw_evidence:
+                if isinstance(item, list) and len(item) >= 3:
+                    # item[0] = title, item[1] = sentence index, item[2] = sentence text
+                    sentences.append(str(item[2]))
+                elif isinstance(item, list) and len(item) == 2:
+                    sentences.append(str(item[1]))
+                elif isinstance(item, str):
+                    sentences.append(item)
+            evidence_text = " ".join(sentences).strip()
+
+        elif "evidence_sentence" in ex and ex["evidence_sentence"]:
             evidence_text = ex["evidence_sentence"]
-        elif "evidence" in ex and isinstance(ex["evidence"], str):
-            evidence_text = ex["evidence"]
+
         elif "evidence_wiki_url" in ex:
-            # Some versions have URL + sentence
             title = ex.get("evidence_wiki_url", "").replace("_", " ")
             sentence = ex.get("evidence_sentence", "")
             evidence_text = f"{title}: {sentence}" if sentence else title
 
-        # If we have evidence, add it to corpus
-        if evidence_text and len(evidence_text.strip()) > 20:
-            ev_key = evidence_text[:100]
-            if ev_key not in corpus_seen:
-                corpus_seen.add(ev_key)
-                corpus.append({
-                    "text": evidence_text,
-                    "title": ex.get("evidence_wiki_url", "").replace("_", " "),
-                    "is_gold": True,
-                })
-        else:
-            # For NOT ENOUGH INFO or missing evidence, use claim as minimal context
-            # This tests whether the pipeline correctly identifies lack of evidence
-            placeholder = f"Context placeholder for claim verification: {claim}"
-            ph_key = placeholder[:100]
-            if ph_key not in corpus_seen:
-                corpus_seen.add(ph_key)
-                corpus.append({
-                    "text": placeholder,
-                    "title": "claim_context",
-                    "is_gold": False,
-                })
+        # Only add questions with real evidence (no placeholders)
+        if not evidence_text or len(evidence_text.strip()) < 20:
+            continue
+
+        ev_key = evidence_text[:100]
+        if ev_key not in corpus_seen:
+            corpus_seen.add(ev_key)
+            corpus.append({
+                "text": evidence_text,
+                "title": ex.get("evidence_wiki_url", "").replace("_", " "),
+                "is_gold": True,
+            })
 
         questions.append({
             "question": claim,
@@ -296,7 +337,7 @@ def load_fever(n: int = 200, split: str = "labelled_dev") -> dict:
 # 5. CoQA — Conversational QA (7 domains)
 # ============================================================
 
-def load_coqa(n: int = 200) -> dict:
+def load_coqa(n: int = 200, offset: int = 0) -> dict:
     """
     Load CoQA — conversational QA across 7 diverse domains.
     Each story comes with passage context + multiple Q&A turns.
@@ -307,10 +348,14 @@ def load_coqa(n: int = 200) -> dict:
 
     Self-contained: each question comes with its passage.
 
+    Args:
+        offset: Skip this many flattened Q&A pairs before starting
+                (for batched runs).
+
     Reference: Reddy et al., "CoQA" (TACL 2019)
     """
     from datasets import load_dataset
-    logger.info(f"Loading CoQA (n={n})...")
+    logger.info(f"Loading CoQA (n={n}, offset={offset})...")
 
     dataset = None
     load_errors = []
@@ -339,6 +384,7 @@ def load_coqa(n: int = 200) -> dict:
     questions = []
     corpus = []
     corpus_seen = set()
+    skipped = 0
 
     for ex in dataset:
         if len(questions) >= n:
@@ -375,6 +421,11 @@ def load_coqa(n: int = 200) -> dict:
 
             answer = answer_texts[i] if i < len(answer_texts) else ""
             if not q_text or not answer:
+                continue
+
+            # Skip the first `offset` flattened Q&A pairs
+            if skipped < offset:
+                skipped += 1
                 continue
 
             questions.append({

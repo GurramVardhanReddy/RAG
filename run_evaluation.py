@@ -110,7 +110,7 @@ BENCHMARK_REGISTRY = {
 # SINGLE BENCHMARK RUNNER
 # ============================================================
 
-def run_single_benchmark(runner, name, load_fn, n, collection_name):
+def run_single_benchmark(runner, name, load_fn, n, collection_name, offset=0, batch_label=None):
     """
     Run evaluation on a single self-contained benchmark.
     
@@ -119,13 +119,19 @@ def run_single_benchmark(runner, name, load_fn, n, collection_name):
     3. Run the full RAG pipeline on each question
     4. Compute metrics and save results
     5. Clean up the temporary collection
+
+    Args:
+        offset: Skip this many questions before loading `n` (for batched runs).
+        batch_label: Optional label appended to the experiment name/output files
+                     (e.g. "batch1_q0-25") so repeated batches don't overwrite results.
     """
+    label_suffix = f" [{batch_label}]" if batch_label else ""
     logger.info(f"\n{'='*60}")
-    logger.info(f"  BENCHMARK: {name}")
+    logger.info(f"  BENCHMARK: {name}{label_suffix}")
     logger.info(f"{'='*60}")
 
-    # Load dataset
-    data = load_fn(n=n)
+    # Load dataset (supports offset for batch-wise runs)
+    data = load_fn(n=n, offset=offset) if offset else load_fn(n=n)
     questions = data["questions"]
     corpus = data["corpus"]
 
@@ -153,10 +159,11 @@ def run_single_benchmark(runner, name, load_fn, n, collection_name):
     logger.info(f"Corpus indexed: {len(corpus_texts)} passages")
 
     # Run evaluation
+    exp_name = f"benchmark_{name}" + (f"_{batch_label}" if batch_label else "")
     results = runner.run_experiment(
         questions=questions,
         document_id=collection_name,
-        experiment_name=f"benchmark_{name}",
+        experiment_name=exp_name,
         top_k=5,
     )
 
@@ -172,22 +179,26 @@ def run_single_benchmark(runner, name, load_fn, n, collection_name):
 # STANDARD BENCHMARKS (ALL 5)
 # ============================================================
 
-def run_standard_benchmarks(runner, n=50, selected_benchmarks=None):
+def run_standard_benchmarks(runner, n=50, selected_benchmarks=None, offset=0, batch_label=None):
     """
     Run all (or selected) self-contained benchmarks.
     
     Args:
         runner: EvaluationRunner instance
-        n: Number of questions per benchmark
+        n: Number of questions per benchmark (per batch, if batching)
         selected_benchmarks: List of benchmark keys to run (e.g., ["hotpotqa", "fever"]).
                             If None, runs all benchmarks.
+        offset: Skip this many questions before starting (for batch-wise runs).
+        batch_label: Optional label for this batch, used in output filenames.
     """
     all_results = {}
 
     benchmarks_to_run = selected_benchmarks or list(BENCHMARK_REGISTRY.keys())
 
     logger.info(f"\nBenchmarks to run: {benchmarks_to_run}")
-    logger.info(f"Questions per benchmark: {n}")
+    logger.info(f"Questions per benchmark: {n} (offset={offset})")
+    if batch_label:
+        logger.info(f"Batch label: {batch_label}")
 
     for key in benchmarks_to_run:
         if key not in BENCHMARK_REGISTRY:
@@ -205,6 +216,8 @@ def run_standard_benchmarks(runner, n=50, selected_benchmarks=None):
                 load_fn=info["loader"],
                 n=n,
                 collection_name=info["collection"],
+                offset=offset,
+                batch_label=batch_label,
             )
             all_results[key] = result
         except Exception as e:
@@ -394,6 +407,10 @@ Examples:
 
   # Everything (benchmarks + custom)
   python run_evaluation.py --experiment both --n 50
+
+  # BATCH-WISE: run questions 0-24 today, 25-49 tomorrow (same benchmark)
+  python run_evaluation.py --experiment benchmarks --n 25 --offset 0  --batch-label batch1 --benchmarks hotpotqa,squad
+  python run_evaluation.py --experiment benchmarks --n 25 --offset 25 --batch-label batch2 --benchmarks hotpotqa,squad
         """
     )
 
@@ -405,7 +422,17 @@ Examples:
     )
     parser.add_argument(
         "--n", type=int, default=50,
-        help="Questions per dataset/type (default: 50)",
+        help="Questions per dataset/type, PER BATCH if using --offset (default: 50)",
+    )
+    parser.add_argument(
+        "--offset", type=int, default=0,
+        help="Skip this many questions before loading --n (for batch-wise runs). "
+             "E.g. --n 25 --offset 25 loads questions 26-50.",
+    )
+    parser.add_argument(
+        "--batch-label", type=str, default=None,
+        help="Label for this batch (e.g. 'batch1'). Appended to output filenames "
+             "so repeated batches don't overwrite each other's results.",
     )
     parser.add_argument(
         "--benchmarks",
@@ -443,6 +470,10 @@ Examples:
     logger.info("=" * 60)
     logger.info(f"  Experiment:    {args.experiment}")
     logger.info(f"  Questions/set: {args.n}")
+    if args.offset:
+        logger.info(f"  Offset:        {args.offset} (questions {args.offset+1}-{args.offset+args.n})")
+    if args.batch_label:
+        logger.info(f"  Batch label:   {args.batch_label}")
     logger.info(f"  LLM-as-judge:  {'OFF' if args.no_judge else 'ON'}")
     logger.info(f"  Benchmarks:    {selected_benchmarks or 'ALL'}")
     logger.info(f"  Output:        {args.output_dir}")
@@ -469,6 +500,7 @@ Examples:
 
         benchmark_results = run_standard_benchmarks(
             runner, n=args.n, selected_benchmarks=selected_benchmarks,
+            offset=args.offset, batch_label=args.batch_label,
         )
         all_results.update(benchmark_results)
 
