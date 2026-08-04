@@ -453,6 +453,15 @@ Examples:
         help="Skip LLM-as-judge evaluation (faster, cheaper)",
     )
     parser.add_argument(
+        "--no-perturb", action="store_true",
+        help="Skip perturbation testing (faster, avoids extra GPT-4o calls)",
+    )
+    parser.add_argument(
+        "--perturb-delay", type=float, default=2.0,
+        help="Seconds to wait between perturbation API calls (default: 2.0). "
+             "Increase if hitting 429 rate limits.",
+    )
+    parser.add_argument(
         "--output-dir", type=str, default="./evaluation_results",
         help="Directory to save results",
     )
@@ -485,7 +494,9 @@ Examples:
     runner = EvaluationRunner(
         output_dir=args.output_dir,
         use_llm_judge=not args.no_judge,
-        collection_name="eval_default",
+        collection_name="eval_benchmark",
+        run_perturbation=not args.no_perturb,
+        perturbation_delay=args.perturb_delay,
     )
 
     all_results = {}

@@ -56,12 +56,14 @@ class EvaluationRunner:
         output_dir: str = "./evaluation_results",
         use_llm_judge: bool = True,
         run_perturbation: bool = True,
+        perturbation_delay: float = 2.0,  # seconds between perturbation API calls
     ):
         settings = get_settings()
         self.api_key = api_key or settings.openai_api_key
         self.output_dir = output_dir
         self.use_llm_judge = use_llm_judge
         self.run_perturbation = run_perturbation
+        self.perturbation_delay = perturbation_delay  # tunable for rate limit tier
         self.eval_domain = "General"
         os.makedirs(output_dir, exist_ok=True)
 
@@ -195,23 +197,61 @@ class EvaluationRunner:
             - contributing_chunks: top chunks that actually drove the answer
             - perturbation_summary: high-level stats
         """
-        # Build a generate_fn closure for the engine
+        import random
+
+        # Build a generate_fn closure with retry + exponential backoff
+        # to handle OpenAI 429 rate limit errors (30K TPM tier)
         def _generate_fn(q: str, results: list[dict]) -> str:
-            return generate_answer(
-                question=q,
-                search_results=results,
-                model_name="gpt-4o",
-                temperature=0,
-                api_key=self.api_key,
-                prompt_mode=prompt_mode,
-            )
+            max_retries = 5
+            base_delay = 2.0  # seconds
+
+            for attempt in range(max_retries):
+                try:
+                    return generate_answer(
+                        question=q,
+                        search_results=results,
+                        model_name="gpt-4o",
+                        temperature=0,
+                        api_key=self.api_key,
+                        prompt_mode=prompt_mode,
+                    )
+                except Exception as e:
+                    err_str = str(e)
+                    # Only retry on rate limit (429) errors
+                    if "429" in err_str or "rate_limit" in err_str.lower():
+                        if attempt < max_retries - 1:
+                            # Exponential backoff: 2s, 4s, 8s, 16s
+                            delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                            logger.warning(
+                                f"Rate limit hit on perturbation chunk "
+                                f"(attempt {attempt+1}/{max_retries}). "
+                                f"Waiting {delay:.1f}s..."
+                            )
+                            time.sleep(delay)
+                        else:
+                            logger.error(f"Perturbation: max retries exceeded. Skipping chunk.")
+                            raise
+                    else:
+                        raise  # Non-429 error — don't retry
+
+        # Build per-chunk generate_fn that adds a small delay between each call
+        # to stay within 30K TPM limit (each call is ~700-800 tokens)
+        # 30K TPM / 800 tokens per call = ~37 calls/min max → ~1.6s per call safe
+        chunk_call_count = [0]
+
+        def _generate_fn_with_delay(q: str, results: list[dict]) -> str:
+            # Add inter-chunk delay after the first call (not before)
+            if chunk_call_count[0] > 0:
+                time.sleep(self.perturbation_delay)
+            chunk_call_count[0] += 1
+            return _generate_fn(q, results)
 
         # Use the engine's built-in perturbation test
         raw_results = self.explainability_engine.run_perturbation_test(
             question=question,
             search_results=search_results,
             original_answer=original_answer,
-            generate_fn=_generate_fn,
+            generate_fn=_generate_fn_with_delay,
         )
 
         # Enrich with chunk text and rank

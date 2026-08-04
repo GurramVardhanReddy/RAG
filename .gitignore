@@ -41,3 +41,6 @@ frontend/.env
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Evaluation outputs
+evaluation_results/
