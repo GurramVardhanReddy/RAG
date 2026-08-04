@@ -411,6 +411,9 @@ Examples:
   # BATCH-WISE: run questions 0-24 today, 25-49 tomorrow (same benchmark)
   python run_evaluation.py --experiment benchmarks --n 25 --offset 0  --batch-label batch1 --benchmarks hotpotqa,squad
   python run_evaluation.py --experiment benchmarks --n 25 --offset 25 --batch-label batch2 --benchmarks hotpotqa,squad
+
+  # Compare retrieval modes / rerankers
+  python run_evaluation.py --experiment benchmarks --n 30 --mode compare --reranker-type none
         """
     )
 
@@ -465,6 +468,18 @@ Examples:
         "--output-dir", type=str, default="./evaluation_results",
         help="Directory to save results",
     )
+    parser.add_argument(
+        "--mode",
+        choices=["dense", "hybrid", "hyde_dense", "hyde_hybrid", "compare"],
+        default="dense",
+        help="Retrieval mode. 'compare' runs all 4 modes and outputs a comparison table.",
+    )
+    parser.add_argument(
+        "--reranker-type",
+        choices=["none", "cross_encoder", "colbert", "compare"],
+        default="none",
+        help="Reranker to use. 'compare' runs cross_encoder vs colbert vs none.",
+    )
 
     args = parser.parse_args()
 
@@ -473,11 +488,17 @@ Examples:
     if args.benchmarks:
         selected_benchmarks = [b.strip() for b in args.benchmarks.split(",")]
 
+    modes = ["dense", "hybrid", "hyde_dense", "hyde_hybrid"] if args.mode == "compare" else [args.mode]
+    reranker_types = ["none", "cross_encoder", "colbert"] if args.reranker_type == "compare" else [args.reranker_type]
+    is_sweep = len(modes) > 1 or len(reranker_types) > 1
+
     # Print configuration
     logger.info("=" * 60)
     logger.info("  Explainable RAG — Pipeline Evaluation (v3)")
     logger.info("=" * 60)
     logger.info(f"  Experiment:    {args.experiment}")
+    logger.info(f"  Mode(s):       {', '.join(modes)}")
+    logger.info(f"  Reranker(s):   {', '.join(reranker_types)}")
     logger.info(f"  Questions/set: {args.n}")
     if args.offset:
         logger.info(f"  Offset:        {args.offset} (questions {args.offset+1}-{args.offset+args.n})")
@@ -489,74 +510,117 @@ Examples:
     logger.info("=" * 60)
 
     start_total = time.time()
-
-    # Initialize runner
-    runner = EvaluationRunner(
-        output_dir=args.output_dir,
-        use_llm_judge=not args.no_judge,
-        collection_name="eval_benchmark",
-        run_perturbation=not args.no_perturb,
-        perturbation_delay=args.perturb_delay,
-    )
-
+    comparison_results = {}
     all_results = {}
+    output_dir = args.output_dir
 
-    # ── Experiment 1: Standard Benchmarks ──
-    if args.experiment in ("benchmarks", "both"):
-        logger.info("\n" + ">" * 60)
-        logger.info(">>> EXPERIMENT 1: Self-Contained Benchmarks")
-        benchmarks_label = selected_benchmarks or list(BENCHMARK_REGISTRY.keys())
-        logger.info(f">>> Running: {', '.join(benchmarks_label)}")
-        logger.info(">" * 60)
+    for mode in modes:
+        for reranker_type in reranker_types:
+            run_label = f"{mode}__{reranker_type}"
+            output_dir = os.path.join(args.output_dir, run_label) if is_sweep else args.output_dir
 
-        benchmark_results = run_standard_benchmarks(
-            runner, n=args.n, selected_benchmarks=selected_benchmarks,
-            offset=args.offset, batch_label=args.batch_label,
-        )
-        all_results.update(benchmark_results)
+            if is_sweep:
+                logger.info(f"\n{'#'*60}")
+                logger.info(f"  MODE: {mode.upper()}  |  RERANKER: {reranker_type.upper()}")
+                logger.info(f"{'#'*60}")
 
-    # ── Experiment 2: Custom Corpus ──
-    if args.experiment in ("custom", "both"):
-        corpus_path = args.corpus
-        if not corpus_path:
-            # Auto-detect UCITS Supplement
-            for p in [
-                "data/uploads/Suppliment_document.pdf",
-                "../Suppliment_document.pdf",
-                "Suppliment_document.pdf",
-            ]:
-                if os.path.exists(p):
-                    corpus_path = p
-                    break
-
-        if corpus_path and os.path.exists(corpus_path):
-            logger.info("\n" + ">" * 60)
-            logger.info(f">>> EXPERIMENT 2: Custom Corpus ({corpus_path})")
-            logger.info(">" * 60)
-
-            custom_results = run_custom_corpus_evaluation(
-                runner=runner,
-                corpus_path=corpus_path,
-                n_per_type=args.n,
-                questions_file=args.questions_file,
+            # Initialize runner
+            runner = EvaluationRunner(
+                output_dir=output_dir,
+                use_llm_judge=not args.no_judge,
+                collection_name="eval_benchmark",
+                run_perturbation=not args.no_perturb,
+                perturbation_delay=args.perturb_delay,
+                retrieval_mode=mode,
+                reranker_type=reranker_type,
             )
-            all_results.update(custom_results)
-        else:
-            logger.warning(
-                "No corpus file found for Experiment 2. "
-                "Use --corpus to specify path, or place Suppliment_document.pdf in data/uploads/"
-            )
+
+            all_results = {}
+
+            # ── Experiment 1: Standard Benchmarks ──
+            if args.experiment in ("benchmarks", "both"):
+                logger.info("\n" + ">" * 60)
+                logger.info(">>> EXPERIMENT 1: Self-Contained Benchmarks")
+                benchmarks_label = selected_benchmarks or list(BENCHMARK_REGISTRY.keys())
+                logger.info(f">>> Running: {', '.join(benchmarks_label)}")
+                logger.info(">" * 60)
+
+                benchmark_results = run_standard_benchmarks(
+                    runner, n=args.n, selected_benchmarks=selected_benchmarks,
+                    offset=args.offset, batch_label=args.batch_label,
+                )
+                all_results.update(benchmark_results)
+
+            # ── Experiment 2: Custom Corpus ──
+            if args.experiment in ("custom", "both"):
+                corpus_path = args.corpus
+                if not corpus_path:
+                    # Auto-detect UCITS Supplement
+                    for p in [
+                        "data/uploads/Suppliment_document.pdf",
+                        "../Suppliment_document.pdf",
+                        "Suppliment_document.pdf",
+                    ]:
+                        if os.path.exists(p):
+                            corpus_path = p
+                            break
+
+                if corpus_path and os.path.exists(corpus_path):
+                    logger.info("\n" + ">" * 60)
+                    logger.info(f">>> EXPERIMENT 2: Custom Corpus ({corpus_path})")
+                    logger.info(">" * 60)
+
+                    custom_results = run_custom_corpus_evaluation(
+                        runner=runner,
+                        corpus_path=corpus_path,
+                        n_per_type=args.n,
+                        questions_file=args.questions_file,
+                    )
+                    all_results.update(custom_results)
+                else:
+                    logger.warning(
+                        "No corpus file found for Experiment 2. "
+                        "Use --corpus to specify path, or place Suppliment_document.pdf in data/uploads/"
+                    )
+
+            if is_sweep and all_results:
+                print_final_summary(all_results)
+
+            comparison_results[run_label] = all_results
+
+    # --- Comparison table across modes/rerankers (sweep runs only) ---
+    if is_sweep and comparison_results:
+        logger.info("\n" + "="*80)
+        logger.info("  MODE COMPARISON")
+        logger.info("="*80)
+        logger.info(f"{'Run':<28} {'Dataset':<22} {'Hit Rate':>9} {'MRR':>9} {'F1':>9} {'Faith.':>9}")
+        logger.info("-"*90)
+        for run_label, results in comparison_results.items():
+            for dataset, result in results.items():
+                agg = result.get("aggregated_metrics", {})
+                hr   = agg.get("hit_rate", {}).get("mean", 0)
+                mrr  = agg.get("mrr", {}).get("mean", 0)
+                f1   = agg.get("f1", {}).get("mean", 0)
+                faith = agg.get("judge_faithfulness", {}).get("mean", 0)
+                logger.info(f"{run_label:<28} {dataset:<22} {hr:>9.4f} {mrr:>9.4f} {f1:>9.4f} {faith:>9.4f}")
+        logger.info("="*80)
+
+        comparison_path = os.path.join(args.output_dir, f"mode_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+        with open(comparison_path, "w") as f:
+            json.dump({m: {ds: r.get("aggregated_metrics", {}) for ds, r in res.items()} for m, res in comparison_results.items()}, f, indent=2, default=str)
+        logger.info(f"Comparison saved to {comparison_path}")
 
     # ── Final Summary ──
     elapsed = time.time() - start_total
     minutes = elapsed / 60
 
-    print_final_summary(all_results)
-    combined_path = save_combined_results(all_results, args.output_dir)
+    if not is_sweep:
+        print_final_summary(all_results)
+        combined_path = save_combined_results(all_results, output_dir)
+        logger.info(f"Combined summary: {combined_path}")
 
     logger.info(f"\nTotal evaluation time: {minutes:.1f} minutes ({elapsed:.0f}s)")
-    logger.info(f"Results saved to: {args.output_dir}")
-    logger.info(f"Combined summary: {combined_path}")
+    logger.info(f"Results saved to: {output_dir}")
     logger.info("Done!")
 
 

@@ -5,15 +5,16 @@ Hybrid retrieval pipeline with domain-adaptive query embedding:
 
     Query → [look up domain for document_id]
           → embed query with SAME model used at index time
-          → Dense + Sparse parallel search in domain collection
+          → Dense (+ Sparse if model supports it) search in domain collection
           → RRF Fusion
-          → Cross-Encoder Rerank
+          → Cross-Encoder Rerank (with threshold)
           → Top-K results
 
-Key change from v1:
-    The query is embedded using the DOMAIN-SPECIFIC model that was used
-    to index the document, not a single global model. This guarantees
-    vector space consistency between document and query embeddings.
+Key design:
+    Query is embedded using the DOMAIN-SPECIFIC model that indexed the
+    document, guaranteeing vector space consistency.
+    Sparse encoding is used only when the domain model supports it (BGE-M3).
+    HyDE generates a hypothetical passage before embedding when enabled.
 
 References:
     - Wang et al., "BERT-based Dense Retrievers Require Interpolation
@@ -28,41 +29,40 @@ from typing import Optional
 
 class HybridRetriever:
     """
-    Domain-aware hybrid retrieval pipeline: Dense + Sparse → RRF → Rerank.
+    Domain-aware hybrid retrieval pipeline: Dense (+ Sparse) → RRF → Rerank.
 
-    The embedding model used for query encoding is selected dynamically
-    based on the domain of the document being queried, ensuring the query
-    vector lives in the same vector space as the indexed document chunks.
+    The embedding model for query encoding is selected dynamically based on
+    the domain of the document being queried, ensuring the query vector lives
+    in the same vector space as the indexed document chunks.
     """
 
     def __init__(
         self,
         vector_store,
-        embedding_model=None,           # Legacy default model (used as fallback)
-        sparse_model_name: str = "prithivida/Splade_PP_en_v1",
-        reranker_model_name: str = "BAAI/bge-reranker-base",
+        embedding_model=None,
+        reranker_model_name: str = "BAAI/bge-reranker-v2-m3",
+        reranker_threshold: float = 0.1,
         use_hybrid: bool = True,
         use_reranker: bool = True,
-        prefetch_limit: int = 20,
-        document_registry: dict = None,  # Shared document registry {doc_id: {...}}
+        use_hyde: bool = False,
+        dense_prefetch: int = 40,
+        sparse_prefetch: int = 10,
+        openai_api_key: str = "",
+        document_registry: dict = None,
     ):
         self.vector_store = vector_store
-        self.embedding_model = embedding_model  # Fallback only
-        self.sparse_model_name = sparse_model_name
+        self.embedding_model = embedding_model      # Fallback when no domain info
         self.reranker_model_name = reranker_model_name
+        self.reranker_threshold = reranker_threshold
         self.use_hybrid = use_hybrid
         self.use_reranker = use_reranker
-        self.prefetch_limit = prefetch_limit
+        self.use_hyde = use_hyde
+        self.dense_prefetch = dense_prefetch
+        self.sparse_prefetch = sparse_prefetch
+        self.openai_api_key = openai_api_key
         self.document_registry = document_registry or {}
 
-        self._sparse_encoder = None
         self._reranker = None
-
-    def init_sparse_encoder(self):
-        """Initialise SPLADE sparse encoder."""
-        from backend.rag.retrieval.sparse_encoder import get_sparse_model
-        self._sparse_encoder = get_sparse_model(self.sparse_model_name)
-        logger.info(f"Sparse encoder ready: {self.sparse_model_name}")
 
     def init_reranker(self):
         """Initialise BGE cross-encoder reranker."""
@@ -81,17 +81,13 @@ class HybridRetriever:
     def _get_domain_info(self, document_id: str) -> tuple[str, str]:
         """
         Look up domain and embedding model for a document.
-
-        Returns:
-            (domain, embedding_model_name)
+        Returns (domain, embedding_model_name).
         """
         if document_id and document_id in self.document_registry:
             doc = self.document_registry[document_id]
             domain = doc.get("domain", "General")
-            model = doc.get("embedding_model", "BAAI/bge-m3")
+            model  = doc.get("embedding_model", "BAAI/bge-m3")
             return domain, model
-
-        # Fallback — use General domain
         return "General", "BAAI/bge-m3"
 
     def _get_query_embedding_model(self, model_name: str):
@@ -100,27 +96,55 @@ class HybridRetriever:
         return get_embedding_model(model_name)
 
     # ----------------------------------------------------------
-    # RETRIEVAL
+    # SPARSE ENCODING (BGE-M3 only)
     # ----------------------------------------------------------
 
-    def _encode_sparse_query(self, query: str):
-        """Generate sparse query vector using SPLADE."""
-        from backend.rag.retrieval.sparse_encoder import encode_sparse_query
-        return encode_sparse_query(query, self.sparse_model_name)
+    def _encode_sparse_query(self, query: str, embedding_model):
+        """
+        Generate sparse query vector if the model supports it (BGE-M3).
+        Returns Qdrant SparseVector or None.
+        """
+        if not hasattr(embedding_model, "embed_query_sparse"):
+            return None
+        from qdrant_client.models import SparseVector
+        sparse_dict = embedding_model.embed_query_sparse(query)
+        return SparseVector(
+            indices=sparse_dict["indices"],
+            values=sparse_dict["values"],
+        )
+
+    # ----------------------------------------------------------
+    # RERANKING
+    # ----------------------------------------------------------
 
     def _rerank(self, query: str, results: list[dict], top_k: int) -> list[dict]:
-        """Re-score results with cross-encoder."""
+        """
+        Re-score results with cross-encoder.
+        Only replaces the RRF score if CE score is not significantly worse
+        (threshold guard prevents the reranker from actively hurting results).
+        """
         if not results:
             return results
+
         pairs = [(query, r["text"]) for r in results]
         ce_scores = self._reranker.predict(pairs)
+
         for result, ce_score in zip(results, ce_scores):
             result["rrf_score"] = result["score"]
-            result["reranker_score"] = float(ce_score)
-            result["score"] = float(ce_score)
-            result["retrieval_method"] = "hybrid_rrf_reranked"
+            ce_score_f = float(ce_score)
+            result["reranker_score"] = ce_score_f
+            if ce_score_f > (result["score"] - self.reranker_threshold):
+                result["score"] = ce_score_f
+                result["retrieval_method"] = "hybrid_rrf_reranked"
+            else:
+                result["retrieval_method"] = "hybrid_rrf_threshold_kept"
+
         results.sort(key=lambda r: r["score"], reverse=True)
         return results[:top_k]
+
+    # ----------------------------------------------------------
+    # MAIN RETRIEVE
+    # ----------------------------------------------------------
 
     def retrieve(
         self,
@@ -132,55 +156,59 @@ class HybridRetriever:
         Run domain-aware hybrid retrieval pipeline.
 
         Flow:
-            1. Look up domain + embedding model for document_id
-            2. Embed query with domain-specific model
-            3. Qdrant hybrid search in domain collection (prefetch + RRF)
-            4. Cross-encoder rerank
-            5. Return top-K with metadata
-
-        Args:
-            query: User's natural language question
-            top_k: Number of final results
-            document_id: Document filter (also determines domain)
-
-        Returns:
-            Dict with:
-                - results: List of result dicts
-                - metadata: Pipeline info including domain + model used
+            1. HyDE: generate hypothesis (optional)
+            2. Domain lookup → select correct embedding model
+            3. Embed query with domain model
+            4. Hybrid search (sparse only if model supports it)
+            5. Rerank with threshold guard
+            6. Return top-K with full metadata
         """
         start_time = time.time()
         timings = {}
+        hypothesis = None
 
-        # ── 1. Domain lookup ──────────────────────────────────────────────
+        # ── 0. HyDE ───────────────────────────────────────────────────────────
+        search_text = query
+        if self.use_hyde and self.openai_api_key:
+            from backend.rag.retrieval.hyde import generate_hypothesis
+            t0 = time.time()
+            hypothesis = generate_hypothesis(query, api_key=self.openai_api_key)
+            search_text = hypothesis
+            timings["hyde_ms"] = (time.time() - t0) * 1000
+
+        # ── 1. Domain lookup ──────────────────────────────────────────────────
         domain, model_name = self._get_domain_info(document_id)
         logger.info(f"Query routing: domain='{domain}', model='{model_name}'")
 
-        # ── 2. Encode query with domain model ──────────────────────────────
+        # ── 2. Encode query ───────────────────────────────────────────────────
         t0 = time.time()
-        query_embedding_model = self._get_query_embedding_model(model_name)
-        dense_vector = query_embedding_model.embed_query(query)
+        query_model = self._get_query_embedding_model(model_name)
+        dense_vector = query_model.embed_query(search_text)
         timings["dense_encode_ms"] = (time.time() - t0) * 1000
 
-        # ── 3. Search ──────────────────────────────────────────────────────
-        retrieval_method = "dense"
-        fetch_k = self.prefetch_limit if self.use_reranker else top_k
+        # ── 3. Search ─────────────────────────────────────────────────────────
+        retrieval_method = "hyde_dense" if self.use_hyde else "dense"
+        fetch_k = self.dense_prefetch if self.use_reranker else top_k
 
-        if self.use_hybrid and self._sparse_encoder is not None:
+        sparse_vector = None
+        if self.use_hybrid:
             t0 = time.time()
-            sparse_vector = self._encode_sparse_query(query)
+            sparse_vector = self._encode_sparse_query(search_text, query_model)
             timings["sparse_encode_ms"] = (time.time() - t0) * 1000
 
+        if self.use_hybrid and sparse_vector is not None:
             t0 = time.time()
             search_results = self.vector_store.hybrid_search(
                 dense_vector=dense_vector,
                 sparse_vector=sparse_vector,
                 top_k=fetch_k,
-                prefetch_limit=self.prefetch_limit,
+                dense_prefetch=self.dense_prefetch,
+                sparse_prefetch=self.sparse_prefetch,
                 document_id=document_id,
                 domain=domain,
             )
             timings["hybrid_search_ms"] = (time.time() - t0) * 1000
-            retrieval_method = "hybrid_rrf"
+            retrieval_method = "hyde_hybrid_rrf" if self.use_hyde else "hybrid_rrf"
         else:
             t0 = time.time()
             search_results = self.vector_store.search(
@@ -191,7 +219,7 @@ class HybridRetriever:
             )
             timings["dense_search_ms"] = (time.time() - t0) * 1000
 
-        # ── 4. Rerank ──────────────────────────────────────────────────────
+        # ── 4. Rerank ─────────────────────────────────────────────────────────
         if self.use_reranker and self._reranker is not None and search_results:
             t0 = time.time()
             search_results = self._rerank(query, search_results, top_k)
@@ -210,15 +238,15 @@ class HybridRetriever:
             "results": search_results,
             "metadata": {
                 "retrieval_method": retrieval_method,
-                "total_candidates": self.prefetch_limit,
+                "total_candidates": self.dense_prefetch + self.sparse_prefetch,
                 "final_count": len(search_results),
                 "processing_time_ms": round(elapsed_ms, 2),
                 "timings": {k: round(v, 2) for k, v in timings.items()},
                 "use_hybrid": self.use_hybrid,
                 "use_reranker": self.use_reranker,
-                "sparse_model": self.sparse_model_name if self.use_hybrid else None,
+                "use_hyde": self.use_hyde,
+                "hypothesis": hypothesis,
                 "reranker_model": self.reranker_model_name if self.use_reranker else None,
-                # Domain-adaptive metadata (NEW)
                 "domain": domain,
                 "query_embedding_model": model_name,
             },

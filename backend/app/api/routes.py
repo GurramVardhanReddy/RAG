@@ -34,7 +34,6 @@ from backend.app.core.config import get_settings
 from backend.rag.chunking.chunker import recursive_chunk, semantic_chunk
 from backend.rag.generation.generator import generate_answer
 from backend.rag.explainability.engine import ExplainabilityEngine
-from backend.rag.retrieval.sparse_encoder import encode_sparse
 from backend.rag.metrics.tracker import RAGMetricsTracker, ResponseQualityMetrics, ResourceMetrics
 from backend.rag.multimodal.processor import extract_and_embed_visuals
 from backend.rag.embedding.domain_detector import detect_domain, DomainDetectionResult
@@ -179,6 +178,7 @@ class ExplainabilityInfo(BaseModel):
     total_chunks_searched: int
     processing_time_ms: float
     retrieval_timings: Optional[dict] = None
+    hyde_hypothesis: Optional[str] = None
 
 
 class MetricsInfo(BaseModel):
@@ -314,8 +314,11 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
     dense_vectors = embedding_model.embed_documents(chunk_texts)
     logger.info(f"Generated {len(dense_vectors)} dense vectors (model={model_name})")
 
-    # 8. Generate SPARSE embeddings (SPLADE — model-agnostic)
-    sparse_vectors = encode_sparse(chunk_texts, model_name=settings.sparse_model)
+    # 6. Generate SPARSE embeddings (BGE-M3 if supported, else empty)
+    if hasattr(embedding_model, "embed_documents_sparse"):
+        sparse_vectors = embedding_model.embed_documents_sparse(chunk_texts)
+    else:
+        sparse_vectors = [{"indices": [], "values": []}] * len(chunk_texts)
     logger.info(f"Generated {len(sparse_vectors)} sparse vectors")
 
     # 9. Store in domain-specific Qdrant collection

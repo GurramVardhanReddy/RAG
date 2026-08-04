@@ -24,6 +24,7 @@ from backend.app.core.config import get_settings
 from backend.rag.embedding.embedder import get_embedding_model
 from backend.rag.generation.generator import generate_answer, build_context
 from backend.rag.explainability.engine import ExplainabilityEngine
+from backend.rag.retrieval.retriever import HybridRetriever
 
 from backend.evaluation.metrics import (
     exact_match,
@@ -57,6 +58,8 @@ class EvaluationRunner:
         use_llm_judge: bool = True,
         run_perturbation: bool = True,
         perturbation_delay: float = 2.0,  # seconds between perturbation API calls
+        retrieval_mode: str = "dense",  # dense | hybrid | hyde_dense | hyde_hybrid
+        reranker_type: str = "none",    # none | cross_encoder | colbert
     ):
         settings = get_settings()
         self.api_key = api_key or settings.openai_api_key
@@ -65,9 +68,11 @@ class EvaluationRunner:
         self.run_perturbation = run_perturbation
         self.perturbation_delay = perturbation_delay  # tunable for rate limit tier
         self.eval_domain = "General"
+        self.retrieval_mode = retrieval_mode
+        self.reranker_type = reranker_type
         os.makedirs(output_dir, exist_ok=True)
 
-        logger.info("Initializing evaluation pipeline...")
+        logger.info(f"Initializing evaluation pipeline (mode: {retrieval_mode})...")
         self.embedding_model = get_embedding_model(settings.embedding_model)
 
         self.vector_store = VectorStoreService(
@@ -78,8 +83,26 @@ class EvaluationRunner:
         )
         self.vector_store.connect()
 
+        use_hybrid = retrieval_mode in ("hybrid", "hyde_hybrid")
+        use_hyde   = retrieval_mode in ("hyde_dense", "hyde_hybrid")
+
+        self.retriever = HybridRetriever(
+            vector_store=self.vector_store,
+            embedding_model=self.embedding_model,
+            reranker_model_name=settings.reranker_model,
+            reranker_threshold=settings.reranker_threshold,
+            use_hybrid=use_hybrid,
+            use_reranker=self.reranker_type != "none",
+            use_hyde=use_hyde,
+            dense_prefetch=settings.dense_prefetch,
+            sparse_prefetch=settings.sparse_prefetch,
+            openai_api_key=self.api_key,
+        )
+        if self.reranker_type not in ("none", "") and self.reranker_type is not None:
+            self.retriever.init_reranker()
+
         self.explainability_engine = ExplainabilityEngine()
-        logger.info("Evaluation pipeline ready")
+        logger.info(f"Evaluation pipeline ready (mode: {retrieval_mode})")
 
     # ============================================================
     # COLLECTION MANAGEMENT
@@ -107,7 +130,6 @@ class EvaluationRunner:
         document_id: str = "eval_corpus",
         metadatas: Optional[list[dict]] = None,
     ):
-        import numpy as np
         from langchain_core.documents import Document
 
         self.vector_store.ensure_collection_for_domain(self.eval_domain)
@@ -119,28 +141,27 @@ class EvaluationRunner:
             meta.setdefault("source", f"passage_{i}")
             docs.append(Document(page_content=text, metadata=meta))
 
-        logger.info(f"Embedding {len(texts)} passages...")
-        vectors = self.embedding_model.embed_documents(texts)
+        # Dense embeddings
+        logger.info(f"Embedding {len(texts)} passages (dense)...")
+        dense_vectors = self.embedding_model.embed_documents(texts)
 
-        class _EmptySparse:
-            indices = np.array([], dtype=np.int64)
-            values = np.array([], dtype=np.float32)
+        # Sparse embeddings (BGE-M3 lexical weights)
+        logger.info(f"Embedding {len(texts)} passages (sparse)...")
+        sparse_vectors = self.embedding_model.embed_documents_sparse(texts)
 
-        dummy_sparse = [_EmptySparse() for _ in range(len(texts))]
-
+        # Store with both vector types
         self.vector_store.add_documents(
             chunks=docs,
-            dense_vectors=vectors,
-            sparse_vectors=dummy_sparse,
+            dense_vectors=dense_vectors,
+            sparse_vectors=sparse_vectors,
             document_id=document_id,
             page_paragraphs={},
             domain=self.eval_domain,
-            embedding_model_name="BAAI/bge-base-en-v1.5",
+            embedding_model_name="BAAI/bge-m3",
         )
-        logger.info(f"Indexed {len(texts)} passages as '{document_id}'")
+        logger.info(f"Indexed {len(texts)} passages as '{document_id}' (dense + sparse)")
 
     def index_uploaded_document(self, file_path: str, document_id: str = "eval_doc"):
-        import numpy as np
         from backend.app.services.document_loader import load_document
         from backend.rag.chunking.chunker import semantic_chunk
 
@@ -155,23 +176,20 @@ class EvaluationRunner:
 
         chunks = semantic_chunk(docs, embedding_model=self.embedding_model)
         chunk_texts = [c.page_content for c in chunks]
-        vectors = self.embedding_model.embed_documents(chunk_texts)
 
-        class _EmptySparse:
-            indices = np.array([], dtype=np.int64)
-            values = np.array([], dtype=np.float32)
-
-        dummy_sparse = [_EmptySparse() for _ in range(len(chunk_texts))]
+        # Dense + sparse embeddings (both from BGE-M3)
+        dense_vectors = self.embedding_model.embed_documents(chunk_texts)
+        sparse_vectors = self.embedding_model.embed_documents_sparse(chunk_texts)
 
         self.vector_store.ensure_collection_for_domain(self.eval_domain)
         self.vector_store.add_documents(
             chunks=chunks,
-            dense_vectors=vectors,
-            sparse_vectors=dummy_sparse,
+            dense_vectors=dense_vectors,
+            sparse_vectors=sparse_vectors,
             document_id=document_id,
             page_paragraphs=page_paragraphs,
             domain=self.eval_domain,
-            embedding_model_name="BAAI/bge-base-en-v1.5",
+            embedding_model_name="BAAI/bge-m3",
         )
         logger.info(f"Indexed {len(chunks)} chunks from {file_path}")
         return chunks
@@ -328,16 +346,14 @@ class EvaluationRunner:
             elif q_dataset == "custom":
                 prompt_mode = "general"
 
-        # 1. Embed query
-        query_vector = self.embedding_model.embed_query(question)
-
-        # 2. Retrieve
-        search_results = self.vector_store.search(
-            query_vector=query_vector,
+        # Retrieve via HybridRetriever (respects retrieval_mode setting)
+        retrieval_output = self.retriever.retrieve(
+            query=question,
             top_k=top_k,
             document_id=document_id,
-            domain=self.eval_domain,
         )
+        search_results = retrieval_output["results"]
+
         retrieved_texts = [r["text"] for r in search_results]
         scores = [r["score"] for r in search_results]
 

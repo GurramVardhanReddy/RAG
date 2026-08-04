@@ -1,19 +1,18 @@
 """
 Explainable RAG — FastAPI Application Entry Point (v0.3.0)
 ==========================================================
-Domain-Adaptive Embedding Selection update:
+Domain-Adaptive Embedding Selection:
 
     - No single global embedding model at startup
-    - Domain models are loaded on-demand per document (cached after first use)
-    - VectorStoreService now manages per-domain collections
-    - HybridRetriever receives shared document_registry for domain lookup
-    - SPLADE sparse encoder + BGE cross-encoder reranker still loaded at startup
+    - Domain models loaded on-demand per document (cached after first use)
+    - VectorStoreService manages per-domain Qdrant collections
+    - HybridRetriever uses document_registry for domain-aware query routing
+    - BGE cross-encoder reranker loaded at startup
 
 Startup sequence:
     1. Connect to Qdrant
-    2. Load SPLADE sparse encoder
-    3. Load BGE cross-encoder reranker
-    4. HybridRetriever initialised (no embedding model — loaded per-document)
+    2. Load cross-encoder reranker
+    3. Initialise HybridRetriever (no embedding model — loaded per-document)
 
 Domain models are downloaded from HuggingFace on FIRST USE of each domain.
 Subsequent uploads/queries for the same domain use the cached model.
@@ -44,7 +43,6 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
     )
 
-    # ── CORS ──────────────────────────────────────────────────────────────────
     application.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
@@ -53,10 +51,8 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # ── Routes ────────────────────────────────────────────────────────────────
     application.include_router(api_router, prefix="/api/v1")
 
-    # ── Startup ───────────────────────────────────────────────────────────────
     @application.on_event("startup")
     async def startup():
         logger.info("=" * 60)
@@ -77,22 +73,19 @@ def create_app() -> FastAPI:
         # 2. Initialise hybrid retriever (no global embedding model)
         retriever = HybridRetriever(
             vector_store=vector_store,
-            embedding_model=None,           # Domain models loaded per-document
-            sparse_model_name=settings.sparse_model,
+            embedding_model=None,
             reranker_model_name=settings.reranker_model,
+            reranker_threshold=settings.reranker_threshold,
             use_hybrid=settings.use_hybrid,
             use_reranker=settings.use_reranker,
-            prefetch_limit=settings.prefetch_limit,
-            document_registry=document_registry,  # Shared live registry
+            use_hyde=settings.use_hyde,
+            dense_prefetch=settings.dense_prefetch,
+            sparse_prefetch=settings.sparse_prefetch,
+            openai_api_key=settings.openai_api_key,
+            document_registry=document_registry,
         )
 
-        # 3. Load SPLADE sparse encoder
-        if settings.use_hybrid:
-            logger.info(f"Loading sparse encoder: {settings.sparse_model}")
-            retriever.init_sparse_encoder()
-            logger.info("SPLADE sparse encoder ready.")
-
-        # 4. Load cross-encoder reranker
+        # 3. Load cross-encoder reranker
         if settings.use_reranker:
             logger.info(f"Loading cross-encoder reranker: {settings.reranker_model}")
             retriever.init_reranker()
@@ -108,7 +101,6 @@ def create_app() -> FastAPI:
         )
         logger.info("=" * 60)
 
-    # ── Health check ──────────────────────────────────────────────────────────
     @application.get("/health")
     async def health():
         from backend.rag.embedding.embedder import list_cached_models

@@ -190,14 +190,24 @@ class VectorStoreService:
                 page_paragraphs.get(page_num, []),
             )
 
+            # Accept BGE-M3 dict {"indices": [...], "values": [...]}
+            # or legacy fastembed SparseEmbedding (.indices / .values arrays)
+            if isinstance(sparse_vec, dict):
+                qdrant_sparse = SparseVector(
+                    indices=sparse_vec["indices"],
+                    values=sparse_vec["values"],
+                )
+            else:
+                qdrant_sparse = SparseVector(
+                    indices=sparse_vec.indices.tolist(),
+                    values=sparse_vec.values.tolist(),
+                )
+
             point = PointStruct(
                 id=str(uuid.uuid4()),
                 vector={
                     "dense": dense_vec,
-                    "sparse": SparseVector(
-                        indices=sparse_vec.indices.tolist(),
-                        values=sparse_vec.values.tolist(),
-                    ),
+                    "sparse": qdrant_sparse,
                 },
                 payload={
                     "text": chunk.page_content,
@@ -235,23 +245,24 @@ class VectorStoreService:
         dense_vector: list[float],
         sparse_vector,
         top_k: int = 5,
-        prefetch_limit: int = 20,
+        dense_prefetch: int = 40,
+        sparse_prefetch: int = 10,
         document_id: str = None,
         domain: str = "General",
     ) -> list[dict]:
         """
-        Hybrid search (dense + sparse → RRF fusion) in a domain collection.
+        Hybrid search (dense + sparse → RRF) in a domain collection.
+        Dense gets more candidates (dense_prefetch) than sparse (sparse_prefetch)
+        to weight dense results higher. Falls back to dense-only on error.
 
         Args:
-            dense_vector: Query dense embedding (must match domain model dim)
-            sparse_vector: SPLADE sparse query vector
+            dense_vector: Domain-model dense embedding
+            sparse_vector: Qdrant SparseVector or BGE-M3 dict
             top_k: Final results to return
-            prefetch_limit: Candidates per arm before fusion
+            dense_prefetch: Candidates from dense arm (default 40)
+            sparse_prefetch: Candidates from sparse arm (default 10)
             document_id: Optional document filter
-            domain: Domain to search in (determines collection)
-
-        Returns:
-            List of result dicts with text, score, metadata
+            domain: Domain collection to search
         """
         if self.client is None:
             return []
@@ -263,6 +274,20 @@ class VectorStoreService:
                 must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))]
             )
 
+        # Accept Qdrant SparseVector, BGE-M3 dict, or legacy fastembed object
+        if isinstance(sparse_vector, SparseVector):
+            qdrant_sparse = sparse_vector
+        elif isinstance(sparse_vector, dict):
+            qdrant_sparse = SparseVector(
+                indices=sparse_vector["indices"],
+                values=sparse_vector["values"],
+            )
+        else:
+            qdrant_sparse = SparseVector(
+                indices=sparse_vector.indices.tolist(),
+                values=sparse_vector.values.tolist(),
+            )
+
         try:
             results = self.client.query_points(
                 collection_name=collection,
@@ -270,16 +295,13 @@ class VectorStoreService:
                     Prefetch(
                         query=dense_vector,
                         using="dense",
-                        limit=prefetch_limit,
+                        limit=dense_prefetch,
                         filter=doc_filter,
                     ),
                     Prefetch(
-                        query=SparseVector(
-                            indices=sparse_vector.indices.tolist(),
-                            values=sparse_vector.values.tolist(),
-                        ),
+                        query=qdrant_sparse,
                         using="sparse",
-                        limit=prefetch_limit,
+                        limit=sparse_prefetch,
                         filter=doc_filter,
                     ),
                 ],
