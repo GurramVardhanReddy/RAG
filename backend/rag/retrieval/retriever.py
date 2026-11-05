@@ -5,7 +5,7 @@ Hybrid retrieval pipeline with domain-adaptive query embedding:
 
     Query → [look up domain for document_id]
           → embed query with SAME model used at index time
-          → Dense (+ Sparse if model supports it) search in domain collection
+          → Dense + Sparse search in domain collection
           → RRF Fusion
           → Cross-Encoder Rerank (with threshold)
           → Top-K results
@@ -13,7 +13,9 @@ Hybrid retrieval pipeline with domain-adaptive query embedding:
 Key design:
     Query is embedded using the DOMAIN-SPECIFIC model that indexed the
     document, guaranteeing vector space consistency.
-    Sparse encoding is used only when the domain model supports it (BGE-M3).
+    The sparse arm uses learned weights when the model has them (BGE-M3)
+    and BM25 otherwise, so every domain gets hybrid retrieval. Before the
+    BM25 arm, dense-only domain models silently skipped the sparse arm.
     HyDE generates a hypothetical passage before embedding when enabled.
 
 References:
@@ -25,6 +27,11 @@ References:
 import time
 from loguru import logger
 from typing import Optional
+
+from backend.rag.retrieval.bm25_sparse import BM25SparseEncoder
+
+# Must match DOMAIN_MODEL_MAP["General"] in domain_detector.py
+GENERAL_MODEL = "BAAI/bge-base-en-v1.5"
 
 
 class HybridRetriever:
@@ -63,6 +70,7 @@ class HybridRetriever:
         self.document_registry = document_registry or {}
 
         self._reranker = None
+        self._bm25 = BM25SparseEncoder()
 
     def init_reranker(self):
         """Initialise BGE cross-encoder reranker."""
@@ -86,9 +94,9 @@ class HybridRetriever:
         if document_id and document_id in self.document_registry:
             doc = self.document_registry[document_id]
             domain = doc.get("domain", "General")
-            model  = doc.get("embedding_model", "BAAI/bge-m3")
+            model  = doc.get("embedding_model", GENERAL_MODEL)
             return domain, model
-        return "General", "BAAI/bge-m3"
+        return "General", GENERAL_MODEL
 
     def _get_query_embedding_model(self, model_name: str):
         """Load the correct embedding model for query encoding."""
@@ -96,28 +104,27 @@ class HybridRetriever:
         return get_embedding_model(model_name)
 
     # ----------------------------------------------------------
-    # SPARSE ENCODING (BGE-M3 only)
+    # SPARSE ENCODING (learned for BGE-M3, BM25 for every other model)
     # ----------------------------------------------------------
 
-    def _encode_sparse_query(self, query: str, embedding_model):
+    def _encode_sparse_query(self, query: str, embedding_model, domain: str = "General"):
         """
-        Generate sparse query vector if the model supports it (BGE-M3).
-        Returns Qdrant SparseVector or None.
+        Generate the sparse query vector for the domain collection.
+        Returns (sparse_dict, vector_name), or (None, None) when no sparse arm exists.
         """
-        if not hasattr(embedding_model, "embed_query_sparse"):
-            return None
-        from qdrant_client.models import SparseVector
-        sparse_dict = embedding_model.embed_query_sparse(query)
-        return SparseVector(
-            indices=sparse_dict["indices"],
-            values=sparse_dict["values"],
-        )
+        if hasattr(embedding_model, "embed_query_sparse"):
+            return embedding_model.embed_query_sparse(query), "sparse"
+        if self.vector_store.supports_bm25(domain):
+            return self._bm25.embed_query(query), "bm25"
+        return None, None
 
     # ----------------------------------------------------------
     # RERANKING
     # ----------------------------------------------------------
 
-    def _rerank(self, query: str, results: list[dict], top_k: int) -> list[dict]:
+    def _rerank(
+        self, query: str, results: list[dict], top_k: int, method: str = "hybrid_rrf"
+    ) -> list[dict]:
         """
         Re-score results with cross-encoder.
         Only replaces the RRF score if CE score is not significantly worse
@@ -135,9 +142,9 @@ class HybridRetriever:
             result["reranker_score"] = ce_score_f
             if ce_score_f > (result["score"] - self.reranker_threshold):
                 result["score"] = ce_score_f
-                result["retrieval_method"] = "hybrid_rrf_reranked"
+                result["retrieval_method"] = f"{method}_reranked"
             else:
-                result["retrieval_method"] = "hybrid_rrf_threshold_kept"
+                result["retrieval_method"] = f"{method}_threshold_kept"
 
         results.sort(key=lambda r: r["score"], reverse=True)
         return results[:top_k]
@@ -187,14 +194,20 @@ class HybridRetriever:
         timings["dense_encode_ms"] = (time.time() - t0) * 1000
 
         # ── 3. Search ─────────────────────────────────────────────────────────
-        retrieval_method = "hyde_dense" if self.use_hyde else "dense"
+        # Label by what actually ran: HyDE is skipped when no OpenAI key is set
+        used_hyde = hypothesis is not None
+        retrieval_method = "hyde_dense" if used_hyde else "dense"
         fetch_k = self.dense_prefetch if self.use_reranker else top_k
 
-        sparse_vector = None
+        sparse_vector, sparse_using = None, None
         if self.use_hybrid:
             t0 = time.time()
-            sparse_vector = self._encode_sparse_query(search_text, query_model)
+            sparse_vector, sparse_using = self._encode_sparse_query(search_text, query_model, domain)
             timings["sparse_encode_ms"] = (time.time() - t0) * 1000
+            if sparse_vector is None:
+                logger.warning(
+                    f"Hybrid requested but no sparse arm for domain '{domain}' — dense only"
+                )
 
         if self.use_hybrid and sparse_vector is not None:
             t0 = time.time()
@@ -206,9 +219,11 @@ class HybridRetriever:
                 sparse_prefetch=self.sparse_prefetch,
                 document_id=document_id,
                 domain=domain,
+                sparse_using=sparse_using,
             )
             timings["hybrid_search_ms"] = (time.time() - t0) * 1000
-            retrieval_method = "hyde_hybrid_rrf" if self.use_hyde else "hybrid_rrf"
+            arm = "bm25" if sparse_using == "bm25" else "sparse"
+            retrieval_method = f"hyde_hybrid_{arm}_rrf" if used_hyde else f"hybrid_{arm}_rrf"
         else:
             t0 = time.time()
             search_results = self.vector_store.search(
@@ -222,7 +237,7 @@ class HybridRetriever:
         # ── 4. Rerank ─────────────────────────────────────────────────────────
         if self.use_reranker and self._reranker is not None and search_results:
             t0 = time.time()
-            search_results = self._rerank(query, search_results, top_k)
+            search_results = self._rerank(query, search_results, top_k, retrieval_method)
             timings["rerank_ms"] = (time.time() - t0) * 1000
             retrieval_method += "_reranked"
         else:
