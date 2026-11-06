@@ -7,9 +7,12 @@ HybridRetriever against an in-memory Qdrant, so no server or API key is
 needed. The reranker is off: this isolates first-stage retrieval.
 
 Benchmarks (BEIR, test split, from the Hugging Face hub):
-    scifact   → Scientific/Academic model (allenai/scibert_scivocab_uncased)
-    nfcorpus  → Medical/Biomedical model (NeuML/pubmedbert-base-embeddings)
-Each is also run with the General model (BAAI/bge-base-en-v1.5).
+    scifact   -> Scientific/Academic route
+    nfcorpus  -> Medical/Biomedical route
+Each runs the domain's routed model plus the General model (once if they are
+the same). The published numbers compared the former routes
+(allenai/scibert_scivocab_uncased, NeuML/pubmedbert-base-embeddings);
+reproduce them with --models.
 
 Modes:
     dense         dense arm only (what every query got before the fix)
@@ -195,6 +198,8 @@ def main():
     ap.add_argument("--datasets", nargs="+", default=list(DATASETS), choices=list(DATASETS))
     ap.add_argument("--max-queries", type=int, default=None)
     ap.add_argument("--no-general", action="store_true", help="skip the General-model runs")
+    ap.add_argument("--models", nargs="+", default=None,
+                    help="embedding models to run instead of the domain route")
     ap.add_argument("--out", default="evaluation_results/hybrid_bm25_eval.json")
     args = ap.parse_args()
 
@@ -204,8 +209,8 @@ def main():
     results = []
     for name in args.datasets:
         domain = DATASETS[name]
-        models = [DOMAIN_MODEL_MAP[domain]]
-        if not args.no_general:
+        models = list(args.models) if args.models else [DOMAIN_MODEL_MAP[domain]]
+        if not args.no_general and DOMAIN_MODEL_MAP["General"] not in models:
             models.append(DOMAIN_MODEL_MAP["General"])
         for model_name in models:
             results.append(evaluate(name, domain, model_name, args.max_queries))

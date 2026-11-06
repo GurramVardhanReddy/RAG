@@ -14,17 +14,14 @@ On query:
     2. The same model used at index time is used to embed the query.
     This guarantees vector space consistency.
 
-BGE-M3 (General domain fallback) additionally supports sparse embeddings
-via BGEM3Embeddings wrapper. Domain-specific models are dense-only.
+All routed models are dense-only; the sparse arm is BM25 (retrieval/bm25_sparse.py).
 
 Models and their dimensions:
     FinLang/finance-embeddings-investopedia            → 768d  (Finance/Regulatory)
     Stern5497/sbert-legal-xlm-roberta-base             → 768d  (Legal)
-    NeuML/pubmedbert-base-embeddings                   → 768d  (Medical/Biomedical)
-    allenai/scibert_scivocab_uncased                   → 768d  (Scientific/Academic)
     jinaai/jina-embeddings-v2-base-code                → 768d  (Code/Software)
     sentence-transformers/multi-qa-mpnet-base-dot-v1   → 768d  (E-commerce/Product)
-    BAAI/bge-m3                                         → 1024d (General fallback)
+    BAAI/bge-base-en-v1.5                              → 768d  (General, Medical, Scientific)
 """
 
 from langchain_huggingface import HuggingFaceEmbeddings

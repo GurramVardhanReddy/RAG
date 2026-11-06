@@ -15,8 +15,8 @@ The system now automatically routes documents to domain-specific embedding model
 |---|---|---|
 | Finance / Regulatory | `FinLang/finance-embeddings-investopedia` | 768d |
 | Legal | `Stern5497/sbert-legal-xlm-roberta-base` | 768d |
-| Medical / Biomedical | `NeuML/pubmedbert-base-embeddings` | 768d |
-| Scientific / Academic | `allenai/scibert_scivocab_uncased` | 768d |
+| Medical / Biomedical | `BAAI/bge-base-en-v1.5` (see Retrieval Benchmark) | 768d |
+| Scientific / Academic | `BAAI/bge-base-en-v1.5` (see Retrieval Benchmark) | 768d |
 | Code / Software | `jinaai/jina-embeddings-v2-base-code` | 768d |
 | E-commerce / Product | `sentence-transformers/multi-qa-mpnet-base-dot-v1` | 768d |
 | General (fallback) | `BAAI/bge-base-en-v1.5` | 768d |
@@ -54,7 +54,7 @@ The source of truth is `DOMAIN_MODEL_MAP` in `backend/rag/embedding/domain_detec
            ┌────────▼────────┐                        │
            │ Domain-Specific  │                        │
            │ Embedding Model  │◄───────────────────────┘
-           │ (7 models)       │
+           │ (per domain)     │
            └────────┬────────┘
                     │
            ┌────────▼────────┐
@@ -320,10 +320,10 @@ top-10 fused with RRF. Δ is the paired bootstrap of hybrid − dense nDCG@10
 
 | Dataset (queries) | Embedding model | Dense | BM25 | Hybrid | Δ nDCG@10 (95% CI) |
 |---|---|---|---|---|---|
-| SciFact (300) | `allenai/scibert_scivocab_uncased` (Scientific route) | 0.146 | 0.667 | 0.536 | +0.390 [+0.352, +0.427] |
-| SciFact (300) | `BAAI/bge-base-en-v1.5` (General) | 0.739 | 0.667 | 0.754 | +0.015 [−0.004, +0.034] |
-| NFCorpus (323) | `NeuML/pubmedbert-base-embeddings` (Medical route) | 0.266 | 0.310 | 0.316 | +0.050 [+0.036, +0.065] |
-| NFCorpus (323) | `BAAI/bge-base-en-v1.5` (General) | 0.370 | 0.310 | 0.367 | −0.003 [−0.013, +0.008] |
+| SciFact (300) | `allenai/scibert_scivocab_uncased` (former Scientific route) | 0.146 | 0.667 | 0.536 | +0.390 [+0.352, +0.427] |
+| SciFact (300) | `BAAI/bge-base-en-v1.5` (General; Scientific route now) | 0.739 | 0.667 | 0.754 | +0.015 [−0.004, +0.034] |
+| NFCorpus (323) | `NeuML/pubmedbert-base-embeddings` (former Medical route) | 0.266 | 0.310 | 0.316 | +0.050 [+0.036, +0.065] |
+| NFCorpus (323) | `BAAI/bge-base-en-v1.5` (General; Medical route now) | 0.370 | 0.310 | 0.367 | −0.003 [−0.013, +0.008] |
 
 nDCG@10 in every cell except the last column. Recall@10 follows the same pattern
 (e.g. SciFact/SciBERT 0.215 → 0.744).
@@ -335,8 +335,12 @@ What this shows:
   With a strong general embedder it is within noise.
 - **SciBERT is not a retrieval model.** It is a masked-language model with mean
   pooling, and dense SciBERT scores 0.146 where `bge-base-en-v1.5` scores 0.739.
-  On both datasets the General model beats the domain-routed model, which argues
-  for revisiting the Scientific and Medical routes.
+  On both datasets the General model beat the domain-routed model, so the
+  Scientific and Medical routes now use `bge-base-en-v1.5`. For the shipped
+  hybrid configuration that moves nDCG@10 from 0.536 to 0.754 on SciFact and
+  from 0.316 to 0.367 on NFCorpus (the rows above; no separate run).
+  Documents indexed before this change keep the model they were indexed with,
+  because queries embed with the model recorded for each document.
 - Latency is not reported as a headline: these runs use Qdrant's in-process
   local mode on CPU, which does not represent a Qdrant server.
 
@@ -344,6 +348,9 @@ Reproduce (downloads the datasets and models; takes about 2 hours on CPU):
 
 ```bash
 python -u scripts/eval_hybrid.py
+# the former routes, as in the table:
+python -u scripts/eval_hybrid.py --datasets scifact --models allenai/scibert_scivocab_uncased
+python -u scripts/eval_hybrid.py --datasets nfcorpus --models NeuML/pubmedbert-base-embeddings
 ```
 
 ---
