@@ -1,0 +1,12 @@
+.git
+.env
+venv/
+.venv/
+**/__pycache__/
+frontend/node_modules/
+frontend/dist/
+data/uploads/*
+data/processed/*
+evaluation_results/
+metrics_output/
+*.log

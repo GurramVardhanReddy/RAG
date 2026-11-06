@@ -38,6 +38,7 @@ from backend.rag.metrics.tracker import RAGMetricsTracker, ResponseQualityMetric
 from backend.rag.multimodal.processor import extract_and_embed_visuals
 from backend.rag.embedding.domain_detector import detect_domain, DomainDetectionResult
 from backend.rag.embedding.embedder import get_embedding_model
+from backend.rag.retrieval.bm25_sparse import BM25SparseEncoder
 
 router = APIRouter()
 settings = get_settings()
@@ -314,12 +315,17 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
     dense_vectors = embedding_model.embed_documents(chunk_texts)
     logger.info(f"Generated {len(dense_vectors)} dense vectors (model={model_name})")
 
-    # 6. Generate SPARSE embeddings (BGE-M3 if supported, else empty)
-    if hasattr(embedding_model, "embed_documents_sparse"):
+    # 8. Generate SPARSE embeddings: learned (BGE-M3 only) + BM25 (every model)
+    has_learned_sparse = hasattr(embedding_model, "embed_documents_sparse")
+    if has_learned_sparse:
         sparse_vectors = embedding_model.embed_documents_sparse(chunk_texts)
     else:
         sparse_vectors = [{"indices": [], "values": []}] * len(chunk_texts)
-    logger.info(f"Generated {len(sparse_vectors)} sparse vectors")
+    bm25_vectors = BM25SparseEncoder().embed_documents(chunk_texts)
+    logger.info(
+        f"Generated {len(bm25_vectors)} BM25 vectors"
+        + (f" and {len(sparse_vectors)} learned sparse vectors" if has_learned_sparse else "")
+    )
 
     # 9. Store in domain-specific Qdrant collection
     vector_store: VectorStoreService = request.app.state.vector_store
@@ -331,7 +337,13 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
         page_paragraphs=page_paragraphs,
         domain=detected_domain,
         embedding_model_name=model_name,
+        bm25_vectors=bm25_vectors,
     )
+    vector_types = [f"dense ({model_name})"]
+    if has_learned_sparse:
+        vector_types.append("sparse (learned)")
+    if vector_store.supports_bm25(detected_domain):
+        vector_types.append("sparse (BM25)")
 
     # 10. Multimodal extraction (PDFs only)
     visual_stats = {"tables": 0, "images": 0, "chunks_added": 0}
@@ -364,7 +376,7 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
         "embedding_model": model_name,
         "embedding_dimension": embedding_dim,
         "domain_confidence": domain_result.confidence,
-        "vector_types": [f"dense ({model_name})", "sparse (SPLADE)"],
+        "vector_types": vector_types,
         "visual_elements": visual_stats,
     }
 

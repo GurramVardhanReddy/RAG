@@ -18,7 +18,7 @@ Domain models are downloaded from HuggingFace on FIRST USE of each domain.
 Subsequent uploads/queries for the same domain use the cached model.
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
@@ -102,21 +102,28 @@ def create_app() -> FastAPI:
         logger.info("=" * 60)
 
     @application.get("/health")
-    async def health():
+    async def health(response: Response):
         from backend.rag.embedding.embedder import list_cached_models
         from backend.rag.embedding.domain_detector import DOMAIN_MODEL_MAP
 
+        # Report the vector DB honestly: a container with no Qdrant is not healthy
+        vector_store = getattr(application.state, "vector_store", None)
+        qdrant_ok = vector_store is not None and vector_store.client is not None
+        if not qdrant_ok:
+            response.status_code = 503
+
         return {
-            "status": "healthy",
+            "status": "healthy" if qdrant_ok else "degraded",
             "version": "0.3.0",
             "feature": "domain_adaptive_embedding",
             "domain_model_map": DOMAIN_MODEL_MAP,
             "cached_models": list_cached_models(),
             "retrieval_mode": (
-                "hybrid_rrf_reranked" if (settings.use_hybrid and settings.use_reranker)
-                else "hybrid_rrf" if settings.use_hybrid
+                "hybrid_bm25_rrf_reranked" if (settings.use_hybrid and settings.use_reranker)
+                else "hybrid_bm25_rrf" if settings.use_hybrid
                 else "dense_only"
             ),
+            "qdrant_connected": qdrant_ok,
             "vector_db": {
                 "host": settings.qdrant_host,
                 "port": settings.qdrant_port,

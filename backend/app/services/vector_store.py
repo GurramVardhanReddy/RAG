@@ -19,6 +19,7 @@ stored in the document registry (routes.py).
 
 import uuid
 from loguru import logger
+from backend.rag.retrieval.bm25_sparse import BM25SparseEncoder
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
@@ -32,6 +33,7 @@ from qdrant_client.models import (
     Prefetch,
     FusionQuery,
     Fusion,
+    Modifier,
 )
 
 # ── Domain → collection suffix map ────────────────────────────────────────────
@@ -62,8 +64,9 @@ class VectorStoreService:
     Manages Qdrant collections for domain-adaptive RAG.
 
     One collection per domain, each with named vectors:
-        - "dense":  Domain-specific embedding (768d or 1024d, cosine)
-        - "sparse": SPLADE sparse vectors (variable dim, dot product)
+        - "dense":  Domain-specific embedding (768d, cosine)
+        - "sparse": Learned sparse weights (BGE-M3 only; empty for dense-only models)
+        - "bm25":   BM25 term weights, IDF applied by Qdrant (every domain)
     """
 
     def __init__(
@@ -81,6 +84,8 @@ class VectorStoreService:
 
         # Track which collections have been created
         self._created_collections: set[str] = set()
+        # Collections created before the "bm25" vector existed: dense-only until re-indexed
+        self._legacy_collections: set[str] = set()
 
     # ----------------------------------------------------------
     # CONNECTION
@@ -129,13 +134,21 @@ class VectorStoreService:
                 },
                 sparse_vectors_config={
                     "sparse": SparseVectorParams(),
+                    "bm25": SparseVectorParams(modifier=Modifier.IDF),
                 },
             )
             logger.info(
                 f"Created collection '{name}' "
-                f"(domain={domain}, dense={dim}d cosine + sparse SPLADE)"
+                f"(domain={domain}, dense={dim}d cosine + learned sparse + BM25)"
             )
         else:
+            sparse_cfg = self.client.get_collection(name).config.params.sparse_vectors or {}
+            if "bm25" not in sparse_cfg:
+                self._legacy_collections.add(name)
+                logger.warning(
+                    f"Collection '{name}' predates the BM25 arm: hybrid search is "
+                    f"unavailable for it until it is deleted and its documents re-uploaded"
+                )
             logger.info(f"Collection '{name}' already exists (domain={domain})")
 
         self._created_collections.add(name)
@@ -143,6 +156,23 @@ class VectorStoreService:
     def ensure_collection(self, domain: str = "General"):
         """Backward-compatible alias."""
         self.ensure_collection_for_domain(domain)
+
+    def supports_bm25(self, domain: str) -> bool:
+        """True if the domain collection has the BM25 sparse vector."""
+        self.ensure_collection_for_domain(domain)
+        return self._collection_name(domain) not in self._legacy_collections
+
+    @staticmethod
+    def _to_qdrant_sparse(sparse_vec) -> SparseVector:
+        """Accept a Qdrant SparseVector, an {"indices", "values"} dict, or a fastembed object."""
+        if isinstance(sparse_vec, SparseVector):
+            return sparse_vec
+        if isinstance(sparse_vec, dict):
+            return SparseVector(indices=sparse_vec["indices"], values=sparse_vec["values"])
+        return SparseVector(
+            indices=sparse_vec.indices.tolist(),
+            values=sparse_vec.values.tolist(),
+        )
 
     # ----------------------------------------------------------
     # DOCUMENT STORAGE
@@ -157,6 +187,7 @@ class VectorStoreService:
         page_paragraphs: dict = None,
         domain: str = "General",
         embedding_model_name: str = "BAAI/bge-m3",
+        bm25_vectors: list | None = None,
     ):
         """
         Store document chunks in the correct domain collection.
@@ -164,7 +195,8 @@ class VectorStoreService:
         Args:
             chunks: LangChain Document objects from chunker
             dense_vectors: Domain-model dense embeddings
-            sparse_vectors: SPLADE sparse embeddings
+            sparse_vectors: Learned sparse embeddings (empty dicts for dense-only models)
+            bm25_vectors: BM25 sparse vectors from BM25SparseEncoder (optional)
             document_id: Unique doc identifier
             page_paragraphs: {page_num: [paragraph_dicts]}
             domain: Detected domain string (e.g. "Finance/Regulatory")
@@ -180,9 +212,12 @@ class VectorStoreService:
         collection = self._collection_name(domain)
         self.ensure_collection_for_domain(domain)
 
+        if bm25_vectors is None or collection in self._legacy_collections:
+            bm25_vectors = [None] * len(chunks)
+
         points = []
-        for i, (chunk, dense_vec, sparse_vec) in enumerate(
-            zip(chunks, dense_vectors, sparse_vectors)
+        for i, (chunk, dense_vec, sparse_vec, bm25_vec) in enumerate(
+            zip(chunks, dense_vectors, sparse_vectors, bm25_vectors)
         ):
             page_num = chunk.metadata.get("page", -1)
             para_info = self._find_paragraph_for_chunk(
@@ -190,25 +225,13 @@ class VectorStoreService:
                 page_paragraphs.get(page_num, []),
             )
 
-            # Accept BGE-M3 dict {"indices": [...], "values": [...]}
-            # or legacy fastembed SparseEmbedding (.indices / .values arrays)
-            if isinstance(sparse_vec, dict):
-                qdrant_sparse = SparseVector(
-                    indices=sparse_vec["indices"],
-                    values=sparse_vec["values"],
-                )
-            else:
-                qdrant_sparse = SparseVector(
-                    indices=sparse_vec.indices.tolist(),
-                    values=sparse_vec.values.tolist(),
-                )
+            vector = {"dense": dense_vec, "sparse": self._to_qdrant_sparse(sparse_vec)}
+            if bm25_vec is not None:
+                vector["bm25"] = self._to_qdrant_sparse(bm25_vec)
 
             point = PointStruct(
                 id=str(uuid.uuid4()),
-                vector={
-                    "dense": dense_vec,
-                    "sparse": qdrant_sparse,
-                },
+                vector=vector,
                 payload={
                     "text": chunk.page_content,
                     "page_number": page_num,
@@ -249,6 +272,7 @@ class VectorStoreService:
         sparse_prefetch: int = 10,
         document_id: str = None,
         domain: str = "General",
+        sparse_using: str = "sparse",
     ) -> list[dict]:
         """
         Hybrid search (dense + sparse → RRF) in a domain collection.
@@ -257,7 +281,8 @@ class VectorStoreService:
 
         Args:
             dense_vector: Domain-model dense embedding
-            sparse_vector: Qdrant SparseVector or BGE-M3 dict
+            sparse_vector: Qdrant SparseVector or {"indices", "values"} dict
+            sparse_using: Sparse vector name: "sparse" (learned) or "bm25"
             top_k: Final results to return
             dense_prefetch: Candidates from dense arm (default 40)
             sparse_prefetch: Candidates from sparse arm (default 10)
@@ -274,19 +299,7 @@ class VectorStoreService:
                 must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))]
             )
 
-        # Accept Qdrant SparseVector, BGE-M3 dict, or legacy fastembed object
-        if isinstance(sparse_vector, SparseVector):
-            qdrant_sparse = sparse_vector
-        elif isinstance(sparse_vector, dict):
-            qdrant_sparse = SparseVector(
-                indices=sparse_vector["indices"],
-                values=sparse_vector["values"],
-            )
-        else:
-            qdrant_sparse = SparseVector(
-                indices=sparse_vector.indices.tolist(),
-                values=sparse_vector.values.tolist(),
-            )
+        qdrant_sparse = self._to_qdrant_sparse(sparse_vector)
 
         try:
             results = self.client.query_points(
@@ -300,7 +313,7 @@ class VectorStoreService:
                     ),
                     Prefetch(
                         query=qdrant_sparse,
-                        using="sparse",
+                        using=sparse_using,
                         limit=sparse_prefetch,
                         filter=doc_filter,
                     ),
@@ -455,8 +468,11 @@ class VectorStoreService:
         self.ensure_collection_for_domain(domain)
 
         points = []
+        bm25 = BM25SparseEncoder() if collection not in self._legacy_collections else None
         for i, (doc, dense_vec) in enumerate(zip(visual_docs, dense_vectors)):
             vector_data = {"dense": dense_vec}
+            if bm25 is not None:
+                vector_data["bm25"] = self._to_qdrant_sparse(bm25.embed_document(doc.page_content))
 
             if sparse_vectors and i < len(sparse_vectors):
                 sv = sparse_vectors[i]

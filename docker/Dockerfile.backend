@@ -7,6 +7,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# CPU-only torch first: the default wheel bundles CUDA and adds ~2 GB to the image
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -14,9 +17,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend source code
 COPY backend/ ./backend/
 
-# Create data directories
-RUN mkdir -p /app/data/uploads /app/data/processed
+# Run as a non-root user; models download to a cache volume on first use
+RUN useradd --create-home --uid 1000 app \
+    && mkdir -p /app/data/uploads /app/data/processed /app/data/extracted_visuals /models \
+    && chown -R app:app /app /models
+ENV HF_HOME=/models
+USER app
 
 EXPOSE 8000
+
+# /health returns 503 when Qdrant is unreachable
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status == 200 else 1)"
 
 CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
