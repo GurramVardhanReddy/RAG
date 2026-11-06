@@ -10,14 +10,9 @@ NOVEL RESEARCH CONTRIBUTION:
     No existing RAG framework dynamically routes to domain-specific
     pre-trained embedding models based on document content at upload time.
 
-Domain → Embedding Model Mapping:
-    Finance/Regulatory  → nickmuchi/sec-bert-base         (SEC filings, regulatory docs)
-    Legal               → nlpaueb/legal-bert-base-uncased (EU/US legal corpora)
-    Medical/Biomedical  → dmis-lab/biobert-base-cased-v1.2 (PubMed/clinical)
-    Scientific/Academic → allenai/scibert_scivocab_uncased (arXiv/scientific papers)
-    Code/Software       → microsoft/codebert-base          (code + docstrings)
-    E-commerce/Product  → sentence-transformers/multi-qa-mpnet-base-dot-v1
-    General (fallback)  → BAAI/bge-m3                     (multilingual, general)
+Domain → Embedding Model Mapping: see DOMAIN_MODEL_MAP below. Medical and
+Scientific route to the General model: on BEIR it beat the domain models
+there (scripts/eval_hybrid.py, README "Retrieval Benchmark").
 
 XAI Method:
     Keyword Attribution — a lightweight, interpretable technique inspired by
@@ -49,8 +44,11 @@ DOMAIN_MODEL_MAP: dict[str, str] = {
     # (fine-tuned for embedding/retrieval, NOT classification)
     "Finance/Regulatory":  "FinLang/finance-embeddings-investopedia",          # Fine-tuned on BGE + Investopedia finance data, 768d
     "Legal":               "Stern5497/sbert-legal-xlm-roberta-base",           # SBERT on legal corpora, XLM-RoBERTa backbone, 768d
-    "Medical/Biomedical":  "NeuML/pubmedbert-base-embeddings",                 # PubMedBERT fine-tuned for PubMed retrieval, 768d
-    "Scientific/Academic": "allenai/scibert_scivocab_uncased",                 # SciBERT trained on scientific papers, 768d
+    # Medical and Scientific use the General model: on BEIR NFCorpus it scored
+    # nDCG@10 0.370 vs 0.266 for NeuML/pubmedbert-base-embeddings, and on SciFact
+    # 0.739 vs 0.146 for allenai/scibert_scivocab_uncased (an MLM, not a retriever).
+    "Medical/Biomedical":  "BAAI/bge-base-en-v1.5",                            # 768d
+    "Scientific/Academic": "BAAI/bge-base-en-v1.5",                            # 768d
     "Code/Software":       "jinaai/jina-embeddings-v2-base-code",              # 150M+ code QA pairs, 30 languages, 768d (needs trust_remote_code=True)
     "E-commerce/Product":  "sentence-transformers/multi-qa-mpnet-base-dot-v1", # Trained on QA retrieval pairs, 768d
     "General":             "BAAI/bge-base-en-v1.5",                            # Strong general retrieval baseline, 768d
