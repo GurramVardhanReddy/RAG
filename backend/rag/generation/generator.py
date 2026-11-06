@@ -59,13 +59,27 @@ Answer:"""
 
 
 # Fact verification: For FEVER-style claims
-VERIFICATION_PROMPT_TEMPLATE = """You are evaluating whether a claim is supported by the provided evidence.
-Based ONLY on the context below, classify the claim as one of:
-- SUPPORTS (the context confirms the claim)
-- REFUTES (the context contradicts the claim)
-- NOT ENOUGH INFO (the context does not contain sufficient information)
+# VERIFICATION_PROMPT_TEMPLATE = """You are evaluating whether a claim is supported by the provided evidence.
+# Based ONLY on the context below, classify the claim as one of:
+# - SUPPORTS (the context confirms the claim)
+# - REFUTES (the context contradicts the claim)
+# - NOT ENOUGH INFO (the context does not contain sufficient information)
 
-Respond with ONLY the label (SUPPORTS, REFUTES, or NOT ENOUGH INFO), followed by a brief explanation.
+# Respond with ONLY the label (SUPPORTS, REFUTES, or NOT ENOUGH INFO), followed by a brief explanation.
+
+# Context:
+# {context}
+
+# Claim:
+# {question}
+
+# Verdict:"""
+VERIFICATION_PROMPT_TEMPLATE = """You are a fact-checking system. Based ONLY on the context below, classify the claim.
+
+Respond with EXACTLY ONE of these labels and nothing else:
+SUPPORTS
+REFUTES
+NOT ENOUGH INFO
 
 Context:
 {context}
@@ -73,7 +87,20 @@ Context:
 Claim:
 {question}
 
-Verdict:"""
+Label:"""
+
+# BoolQ: Yes/No questions — output True or False only
+BOOLQ_PROMPT_TEMPLATE = """Answer the yes/no question using ONLY the provided context.
+Respond with EXACTLY one word: True or False.
+If the context does not contain enough information, respond with: False
+
+Context:
+{context}
+
+Question:
+{question}
+
+Answer:"""
 
 
 # Map prompt mode names to templates
@@ -81,6 +108,7 @@ PROMPT_TEMPLATES = {
     "domain": DOMAIN_PROMPT_TEMPLATE,
     "general": GENERAL_PROMPT_TEMPLATE,
     "verification": VERIFICATION_PROMPT_TEMPLATE,
+    "boolq": BOOLQ_PROMPT_TEMPLATE,
 }
 
 

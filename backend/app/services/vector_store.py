@@ -346,7 +346,6 @@ class VectorStoreService:
             )
 
         try:
-            # client.search() was removed in qdrant-client 1.13; query_points replaces it
             results = self.client.query_points(
                 collection_name=collection,
                 query=query_vector,
